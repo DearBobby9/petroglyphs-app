@@ -1,0 +1,58 @@
+[
+  {
+    "id": "just-cast",
+    "name": "Send to LLM",
+    "icon": "🖌️",
+    "prompt": "",
+    "auto_action": null,
+    "color": "#D4874D"
+  },
+  {
+    "id": "math-tutor",
+    "name": "Math tutor",
+    "icon": "📐",
+    "prompt": "Review this handwritten math. Identify the problem, show a step-by-step solution, and point out any errors.",
+    "auto_action": null,
+    "color": "#5B8FA8"
+  },
+  {
+    "id": "vocab-capture",
+    "name": "Vocab capture",
+    "icon": "📝",
+    "prompt": "Extract all handwritten words. Define each one and save as a vocabulary note.",
+    "auto_action": "save_to_obsidian",
+    "color": "#7A9A6D"
+  },
+  {
+    "id": "sketch-critique",
+    "name": "Sketch critique",
+    "icon": "🎨",
+    "prompt": "Analyze this sketch. Comment on composition, proportions, and technique. Suggest improvements.",
+    "auto_action": null,
+    "color": "#C9A84C"
+  },
+  {
+    "id": "translate",
+    "name": "Translate this",
+    "icon": "🌍",
+    "prompt": "Read the handwritten text and translate it to English. If already English, translate to Spanish.",
+    "auto_action": null,
+    "color": "#A65D4E"
+  },
+  {
+    "id": "save-obsidian",
+    "name": "Save to Obsidian",
+    "icon": "🗄️",
+    "prompt": "Read the handwriting, transcribe it, and save it as a note.",
+    "auto_action": "save_to_obsidian",
+    "color": "#8A8078"
+  },
+  {
+    "id": "export-diagram",
+    "name": "Export diagram",
+    "icon": "📊",
+    "prompt": "This is a hand-drawn diagram. Export it as an Excalidraw file preserving the structure.",
+    "auto_action": "export_to_excalidraw",
+    "color": "#C4956A"
+  }
+]

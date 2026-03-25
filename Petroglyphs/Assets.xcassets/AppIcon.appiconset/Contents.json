@@ -1,6 +1,7 @@
 {
   "images" : [
     {
+      "filename" : "petroglyphs-icon.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"
@@ -12,6 +13,7 @@
           "value" : "dark"
         }
       ],
+      "filename" : "petroglyphs-dark-icon.png",
       "idiom" : "universal",
       "platform" : "ios",
       "size" : "1024x1024"

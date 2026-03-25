@@ -1,17 +1,22 @@
-//
-//  PetroglyphsApp.swift
-//  Petroglyphs
-//
-//  Created by Stan Kam on 22/3/2026.
-//
-
 import SwiftUI
 
 @main
 struct PetroglyphsApp: App {
+    @State private var appState = AppState()
+    @State private var connectionMonitor = ConnectionMonitor()
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            Group {
+                switch appState.currentPage {
+                case .landing:
+                    LandingView()
+                case .canvas:
+                    CanvasPageView()
+                }
+            }
+            .environment(appState)
+            .environment(connectionMonitor)
         }
     }
 }
