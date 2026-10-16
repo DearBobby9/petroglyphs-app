@@ -2,7 +2,10 @@ import SwiftUI
 import PencilKit
 
 struct CanvasView: UIViewRepresentable {
+    @Environment(\.colorScheme) private var colorScheme
     @Binding var drawing: PKDrawing
+    var backgroundColor: UIColor = .white
+    var isDrawingActive = true
     var onFirstStroke: () -> Void
     var onClear: (() -> Void)?
 
@@ -13,7 +16,7 @@ struct CanvasView: UIViewRepresentable {
     func makeUIView(context: Context) -> PKCanvasView {
         let canvas = PKCanvasView()
         canvas.drawing = drawing
-        canvas.backgroundColor = .white
+        canvas.backgroundColor = backgroundColor.withAlphaComponent(1)
         canvas.isOpaque = true
         canvas.delegate = context.coordinator
 
@@ -31,18 +34,28 @@ struct CanvasView: UIViewRepresentable {
 
         // Tool picker
         let toolPicker = PKToolPicker()
-        toolPicker.setVisible(true, forFirstResponder: canvas)
+        CanvasAppearance.apply(colorScheme, to: canvas, toolPicker: toolPicker)
+        context.coordinator.isDrawingActive = isDrawingActive
+        toolPicker.setVisible(isDrawingActive, forFirstResponder: canvas)
         toolPicker.addObserver(canvas)
         context.coordinator.toolPicker = toolPicker
 
         DispatchQueue.main.async {
-            canvas.becomeFirstResponder()
+            if context.coordinator.isDrawingActive { canvas.becomeFirstResponder() }
         }
 
         return canvas
     }
 
     func updateUIView(_ canvas: PKCanvasView, context: Context) {
+        CanvasAppearance.apply(colorScheme, to: canvas, toolPicker: context.coordinator.toolPicker)
+        if context.coordinator.isDrawingActive != isDrawingActive {
+            context.coordinator.isDrawingActive = isDrawingActive
+            context.coordinator.toolPicker?.setVisible(isDrawingActive, forFirstResponder: canvas)
+            if isDrawingActive { canvas.becomeFirstResponder() }
+            else if canvas.isFirstResponder { canvas.resignFirstResponder() }
+        }
+        canvas.backgroundColor = backgroundColor.withAlphaComponent(1)
         if canvas.drawing != drawing {
             canvas.drawing = drawing
         }
@@ -60,6 +73,7 @@ struct CanvasView: UIViewRepresentable {
         var onFirstStroke: () -> Void
         var onClear: (() -> Void)?
         var toolPicker: PKToolPicker?
+        var isDrawingActive = true
         private var hasStrokedOnce = false
 
         init(drawing: Binding<PKDrawing>, onFirstStroke: @escaping () -> Void, onClear: (() -> Void)?) {

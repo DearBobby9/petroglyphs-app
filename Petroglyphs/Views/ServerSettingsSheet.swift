@@ -49,8 +49,26 @@ struct ServerSettingsSheet: View {
 
                 // ✅ Show only the relevant section based on mode
                 if selectedMode == .local {
+                    if connectionMonitor.serverURL != nil {
+                        Section("Connection") {
+                            LabeledContent("Route", value: connectionMonitor.transportDescription)
+                                .accessibilityIdentifier("connection.transport")
+                                .accessibilityValue(connectionMonitor.transportDescription)
+                            if let endpoint = connectionMonitor.activeEndpoint {
+                                LabeledContent("Mac address", value: endpoint.absoluteString)
+                                    .font(.subheadline)
+                                    .accessibilityIdentifier("connection.endpoint")
+                                    .accessibilityValue(endpoint.absoluteString)
+                            }
+                            Text(connectionMonitor.recoveryDescription)
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .accessibilityIdentifier("connection.recovery")
+                                .accessibilityValue(connectionMonitor.backupReady ? "Backup address saved" : "Backup unavailable")
+                        }
+                    }
                     Section {
-                        TextField("Local IP with\":3333\" like example below", text: $input)
+                        TextField("Paired Mac URL", text: $input)
                             .keyboardType(.URL)
                             .autocorrectionDisabled()
                             .textInputAutocapitalization(.never)
@@ -60,7 +78,7 @@ struct ServerSettingsSheet: View {
                     } header: {
                         Text("MCP Server URL")
                     } footer: {
-                        Text("Enter the local IP address of your server, e.g. http://192.168.1.10:3333")
+                        Text("Use the paired URL from your Mac. After the first connection, Petroglyphs reconnects over the local network and uses Tailscale when needed. Keep Tailscale connected on both devices.")
                     }
                 } else {
                     Section {

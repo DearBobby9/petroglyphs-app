@@ -1,0 +1,28 @@
+name: CanvasBackgroundChecks
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: '17.6'
+    SWIFT_VERSION: '5.0'
+    CODE_SIGNING_ALLOWED: NO
+targets:
+  CanvasBackgroundTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - CanvasBackgroundExportTests.swift
+      - ../Petroglyphs/Models/CanvasBackground.swift
+      - ../Petroglyphs/Models/CanvasAppearance.swift
+      - ../Petroglyphs/Models/StrokeMetadata.swift
+      - ../Petroglyphs/Extensions/PKDrawing+Export.swift
+      - ../Petroglyphs/Services/CanvasExporter.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bobbyjia.petroglyphs.backgroundtests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  CanvasBackgroundChecks:
+    build:
+      targets:
+        CanvasBackgroundTests: [test]
+    test:
+      targets: [CanvasBackgroundTests]

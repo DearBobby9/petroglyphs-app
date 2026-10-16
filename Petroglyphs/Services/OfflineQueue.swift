@@ -16,7 +16,7 @@ class OfflineQueue {
         pending = []
         Task {
             for item in items {
-                try? await network.submit(item, to: serverURL)
+                _ = try? await network.submit(item, to: serverURL)
             }
         }
     }

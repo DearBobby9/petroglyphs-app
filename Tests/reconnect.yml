@@ -1,0 +1,26 @@
+name: ReconnectChecks
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: '17.6'
+    SWIFT_VERSION: '5.0'
+    CODE_SIGNING_ALLOWED: NO
+targets:
+  ReconnectTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - BridgeTransportTests.swift
+      - ../Petroglyphs/Models/BridgeConnection.swift
+      - ../Petroglyphs/Models/HealthResponse.swift
+      - ../Petroglyphs/Services/BridgeTransport.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bobbyjia.petroglyphs.reconnecttests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  ReconnectChecks:
+    build:
+      targets:
+        ReconnectTests: [test]
+    test:
+      targets: [ReconnectTests]

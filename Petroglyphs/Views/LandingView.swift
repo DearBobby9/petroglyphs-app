@@ -21,7 +21,7 @@ struct LandingView: View {
                         .fixedSize(horizontal: true, vertical: false)
                     Text("A handwriting keyboard for AI")
                         .font(.rounded(18))
-                        .foregroundStyle(Color.charcoal.opacity(0.6))
+                        .foregroundStyle(.secondary)
                 }
 
                 Spacer()
@@ -31,7 +31,7 @@ struct LandingView: View {
                     ConnectionDot(isConnected: connectionMonitor.isConnected)
                     Text(connectionMonitor.isConnected ? "Connected to server" : "No server connection")
                         .font(.rounded(14))
-                        .foregroundStyle(Color.charcoal.opacity(0.55))
+                        .foregroundStyle(.secondary)
                 }
                 .padding(.bottom, 28)
 
@@ -56,7 +56,7 @@ struct LandingView: View {
                 // Footer
                 Text("v0.1.0  ·  MIT License  ·  petroglyphs")
                     .font(.rounded(12))
-                    .foregroundStyle(Color.charcoal.opacity(0.35))
+                    .foregroundStyle(.secondary)
 
                 Spacer(minLength: 24)
             }

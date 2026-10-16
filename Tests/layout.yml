@@ -1,0 +1,24 @@
+name: CanvasChatLayoutChecks
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: '17.6'
+    SWIFT_VERSION: '5.0'
+    CODE_SIGNING_ALLOWED: NO
+targets:
+  CanvasChatLayoutTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - CanvasChatLayoutTests.swift
+      - ../Petroglyphs/Models/CanvasChatLayout.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bobbyjia.petroglyphs.layouttests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  CanvasChatLayoutChecks:
+    build:
+      targets:
+        CanvasChatLayoutTests: [test]
+    test:
+      targets: [CanvasChatLayoutTests]

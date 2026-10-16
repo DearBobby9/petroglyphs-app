@@ -14,10 +14,10 @@ struct OchreButton: View {
         Button(action: action) {
             Text(label)
                 .font(.rounded(18, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(Color.onAccent)
                 .padding(.horizontal, 32)
                 .padding(.vertical, 14)
-                .background(isPressed ? Color.burntOchre : Color.ochre)
+                .background(Color.ochre.brightness(isPressed ? -0.06 : 0))
                 .clipShape(RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)

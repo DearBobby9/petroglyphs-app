@@ -1,5 +1,6 @@
 import PencilKit
 import Foundation
+import UIKit
 
 extension PKDrawing {
     func extractStrokeMetadata(duration: Double) -> StrokeMetadata {
@@ -31,9 +32,22 @@ extension PKDrawing {
         )
     }
 
-    func exportPNG(scale: CGFloat = 1.0) -> Data? {
+    func exportPNG(scale: CGFloat = 1.0, backgroundColor: UIColor = .white) -> Data? {
         let rect = bounds.isEmpty ? CGRect(x: 0, y: 0, width: 100, height: 100) : bounds
-        let image = self.image(from: rect, scale: scale)
-        return image.pngData()
+        var pngData: Data?
+        UITraitCollection(userInterfaceStyle: .light).performAsCurrent {
+            let image = self.image(from: rect, scale: scale)
+            let format = UIGraphicsImageRendererFormat()
+            format.scale = image.scale
+            format.opaque = true
+            let renderer = UIGraphicsImageRenderer(size: image.size, format: format)
+            // Keep ink interpretation fixed while matching the selected, opaque canvas background.
+            pngData = renderer.pngData { context in
+                backgroundColor.withAlphaComponent(1).setFill()
+                context.fill(CGRect(origin: .zero, size: image.size))
+                image.draw(at: .zero)
+            }
+        }
+        return pngData
     }
 }

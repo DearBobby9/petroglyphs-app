@@ -10,7 +10,7 @@ struct SettingTile: View {
             VStack(spacing: 10) {
                 Image(systemName: icon)
                     .font(.system(size: 28, weight: .regular))
-                    .foregroundStyle(Color.ochre)
+                    .foregroundStyle(Color.burntOchre)
                 Text(label)
                     .font(.rounded(14, weight: .medium))
                     .foregroundStyle(Color.charcoal)

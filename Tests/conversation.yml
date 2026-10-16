@@ -1,0 +1,37 @@
+name: ConversationChecks
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: '17.6'
+    SWIFT_VERSION: '5.0'
+    CODE_SIGNING_ALLOWED: NO
+targets:
+  ConversationTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - CodexConversationStoreTests.swift
+      - ../Petroglyphs/Models/CodexConversation.swift
+      - ../Petroglyphs/Models/CodexHost.swift
+      - ../Petroglyphs/Models/CodexThread.swift
+      - ../Petroglyphs/Models/CodexReply.swift
+      - ../Petroglyphs/Models/Combo.swift
+      - ../Petroglyphs/Models/SubmissionPayload.swift
+      - ../Petroglyphs/Models/StrokeMetadata.swift
+      - ../Petroglyphs/Models/HealthResponse.swift
+      - ../Petroglyphs/Models/BridgeConnection.swift
+      - ../Petroglyphs/Services/BridgeTransport.swift
+      - ../Petroglyphs/Services/NetworkService.swift
+      - ../Petroglyphs/Services/NetworkService+Conversation.swift
+      - ../Petroglyphs/Services/CodexAttachmentImporter.swift
+      - ../Petroglyphs/Services/CodexConversationStore.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bobbyjia.petroglyphs.conversationtests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  ConversationChecks:
+    build:
+      targets:
+        ConversationTests: [test]
+    test:
+      targets: [ConversationTests]

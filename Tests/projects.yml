@@ -1,0 +1,38 @@
+name: ProjectChecks
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: '17.6'
+    SWIFT_VERSION: '5.0'
+    CODE_SIGNING_ALLOWED: NO
+targets:
+  ProjectTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - CodexProjectModelsTests.swift
+      - ../Petroglyphs/Models/CodexProject.swift
+      - ../Petroglyphs/Models/CodexHost.swift
+      - ../Petroglyphs/Models/CodexThread.swift
+      - ../Petroglyphs/Models/CodexReply.swift
+      - ../Petroglyphs/Models/Combo.swift
+      - ../Petroglyphs/Models/SubmissionPayload.swift
+      - ../Petroglyphs/Models/StrokeMetadata.swift
+      - ../Petroglyphs/Models/HealthResponse.swift
+      - ../Petroglyphs/Models/BridgeConnection.swift
+      - ../Petroglyphs/Services/BridgeTransport.swift
+      - ../Petroglyphs/Services/NetworkService.swift
+      - ../Petroglyphs/Services/NetworkService+Projects.swift
+      - ../Petroglyphs/ViewModels/CodexThreadListModel.swift
+      - ../Petroglyphs/ViewModels/CodexProjectListModel.swift
+      - ../Petroglyphs/ViewModels/CodexProjectCreationModel.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bobbyjia.petroglyphs.projecttests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  ProjectChecks:
+    build:
+      targets:
+        ProjectTests: [test]
+    test:
+      targets: [ProjectTests]
