@@ -82,30 +82,25 @@ struct CanvasPageView: View {
             Color.limestone.ignoresSafeArea()
             GeometryReader { geometry in
                 let useSidebar = CanvasChatFrames.supportsSideBySide(in: geometry.size, accessibilityText: dynamicTypeSize.isAccessibilitySize)
-                let chatFillsPage = hasReplyPanel && (chatFocused || (composerFocused && !useSidebar))
+                let chatFillsPage = hasReplyPanel && repliesExpanded && (chatFocused || (composerFocused && !useSidebar))
                 let availableSize = CGSize(width: max(0, geometry.size.width - 32), height: max(0, geometry.size.height - 24))
                 let stackedChatHeight = CanvasChatFrames.preferredStackedHeight(in: availableSize.height)
-                let mode: CanvasChatLayoutMode = !hasReplyPanel ? .canvasOnly : (useSidebar ? .sideBySide : (chatFillsPage ? .chatOnly : .stacked))
+                let mode: CanvasChatLayoutMode = !hasReplyPanel ? .canvasOnly : (useSidebar ? .sideBySide : .stacked)
                 let canResize = hasReplyPanel && useSidebar && repliesExpanded && !chatFillsPage
                 let controls = layoutControls(availableWidth: availableSize.width, canResize: canResize)
-                let chatExtent = resizingChatExtent ?? (chatFillsPage ? availableSize.width : (repliesExpanded ? CanvasChatFrames.chatExtent(fraction: chatWidthFraction, availableWidth: availableSize.width) : 0))
-                CanvasChatLayout(mode: mode, side: chatSide, chatFraction: chatWidthFraction,
-                                 isExpanded: repliesExpanded, stackedChatHeight: stackedChatHeight,
-                                 chatExtent: chatExtent) {
+                let expandedExtent = useSidebar
+                    ? CanvasChatFrames.chatExtent(fraction: chatWidthFraction, availableWidth: availableSize.width)
+                    : stackedChatHeight + CanvasChatFrames.stackedSpacing / 2
+                let fullExtent = useSidebar ? availableSize.width : availableSize.height
+                let chatExtent = resizingChatExtent ?? (repliesExpanded ? (chatFillsPage ? fullExtent : expandedExtent) : 0)
+                CanvasChatLayout(mode: mode, side: chatSide, chatExtent: chatExtent) {
                     CanvasChatPane(minimumWidth: useSidebar ? CanvasChatFrames.minimumCanvasWidth : 0,
+                                   minimumHeight: useSidebar ? 0 : 160,
                                    alignment: chatSide == .left ? .trailing : .leading) {
                         drawingSurface
-                            .overlay(alignment: chatSide == .left ? .topLeading : .topTrailing) {
-                                if hasReplyPanel && useSidebar && !repliesExpanded {
-                                    restoreChatControl
-                                        .padding(.horizontal, 12)
-                                        .padding(.top, 76)
-                                }
-                            }
                     }
                         .accessibilityElement(children: .contain)
                         .accessibilityIdentifier("canvas.surface")
-                        .opacity(chatFillsPage && !useSidebar ? 0 : 1)
                         .allowsHitTesting(!chatFillsPage)
                         .accessibilityHidden(chatFillsPage)
                     CanvasChatDivider(controls: controls, availableWidth: availableSize.width,
@@ -120,29 +115,41 @@ struct CanvasPageView: View {
                         .accessibilityHidden(!canResize)
                     if hasReplyPanel {
                         CanvasChatPane(minimumWidth: useSidebar ? CanvasChatFrames.minimumChatWidth : 0,
+                                       minimumHeight: useSidebar ? 0 : stackedChatHeight,
                                        alignment: chatSide == .left ? .leading : .trailing) {
                             CodexRepliesPanel(
                                 store: appState.codexConversation,
                                 target: selectedTarget,
-                                compactHeight: useSidebar || chatFillsPage ? nil : stackedChatHeight,
-                                isExpanded: $repliesExpanded,
                                 isFocused: chatFillsPage,
                                 canSend: connectionMonitor.isConnected && selectedTarget?.host.canSelect == true,
                                 onChooseChat: chooseChat,
                                 onAddCanvas: canvasSnapshot,
-                                onComposerFocusChanged: { composerFocused = $0 },
+                                onComposerFocusChanged: { focused in
+                                    withAnimation(layoutAnimation()) { composerFocused = focused }
+                                },
                                 onExpand: { toggleChatFocus(isFillingPage: chatFillsPage) },
                                 layoutControls: controls,
-                                keepsContentsMounted: useSidebar,
-                                onToggleExpanded: toggleReplies
+                                reservesTopTrailingControl: chatFillsPage || (useSidebar && chatSide == .right)
                             )
                         }
-                        .allowsHitTesting(!useSidebar || repliesExpanded)
-                        .accessibilityHidden(useSidebar && !repliesExpanded)
+                        .allowsHitTesting(repliesExpanded)
+                        .accessibilityHidden(!repliesExpanded)
+                    }
+                }
+                .transaction(value: chatExtent) { transaction in
+                    // AppStorage updates can arrive without the button's animation.
+                    // Preserve the release spring's velocity and direct drag tracking.
+                    if reduceMotion {
+                        transaction.animation = nil
+                    } else if !transaction.disablesAnimations && resizingChatExtent == nil && transaction.animation == nil {
+                        transaction.animation = layoutAnimation()
                     }
                 }
                 .coordinateSpace(name: "canvas-chat-workspace")
                 .clipped()
+                .overlay(alignment: .topTrailing) {
+                    if hasReplyPanel { chatVisibilityControl.padding(16) }
+                }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("canvas.workspace")
                 .accessibilityValue("Chat on \(chatSide.rawValue), \(chatFillsPage ? "canvas hidden" : (repliesExpanded ? "split" : "chat hidden"))")
@@ -237,7 +244,7 @@ struct CanvasPageView: View {
     }
 
     private func layoutAnimation(initialVelocity: Double = 0) -> Animation? {
-        reduceMotion ? nil : .interpolatingSpring(duration: 0.3, bounce: 0, initialVelocity: initialVelocity)
+        reduceMotion ? nil : .interpolatingSpring(duration: 0.38, bounce: 0, initialVelocity: initialVelocity)
     }
 
     private func toggleReplies() {
@@ -249,20 +256,21 @@ struct CanvasPageView: View {
         }
     }
 
-    private var restoreChatControl: some View {
+    private var chatVisibilityControl: some View {
         Button(action: toggleReplies) {
-            Label("Chat", systemImage: chatSide == .left ? "sidebar.left" : "sidebar.right")
-                .font(.callout.weight(.semibold))
-                .padding(.horizontal, 12)
-                .frame(minHeight: 44)
-                .foregroundStyle(Color.charcoal)
-                .background(Color.panelBackground, in: Capsule())
-                .overlay(Capsule().stroke(Color.charcoal.opacity(0.16)))
+            Image(systemName: repliesExpanded ? "bubble.left.and.bubble.right.fill" : "bubble.left.and.bubble.right")
+                .font(.system(size: 18, weight: .medium))
+                .foregroundStyle(repliesExpanded ? Color.onAccent : Color.charcoal)
+                .frame(width: 44, height: 44)
+                .background(repliesExpanded ? Color.ochre : Color.sandstone.opacity(0.9), in: Circle())
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("Show chat")
-        .accessibilityValue("Collapsed")
-        .accessibilityIdentifier("canvas.restoreChat")
+        .animation(.easeOut(duration: 0.12), value: repliesExpanded)
+        .accessibilityLabel(repliesExpanded ? "Hide chat" : "Show chat")
+        .accessibilityValue(repliesExpanded ? "Expanded" : "Collapsed")
+        .accessibilityHint(repliesExpanded ? "Keeps the current conversation and draft." : "Opens the selected conversation.")
+        .accessibilityIdentifier("canvas.repliesToggle")
     }
 
     private var drawingSurface: some View {

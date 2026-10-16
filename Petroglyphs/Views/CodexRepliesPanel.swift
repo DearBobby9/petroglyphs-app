@@ -5,8 +5,6 @@ import UniformTypeIdentifiers
 struct CodexRepliesPanel: View {
     let store: CodexConversationStore
     let target: CodexChatTarget?
-    let compactHeight: CGFloat?
-    @Binding var isExpanded: Bool
     var isFocused = false
     var canSend = true
     let onChooseChat: () -> Void
@@ -14,42 +12,33 @@ struct CodexRepliesPanel: View {
     let onComposerFocusChanged: (Bool) -> Void
     var onExpand: (() -> Void)? = nil
     var layoutControls: CanvasChatLayoutControls? = nil
-    var keepsContentsMounted = false
-    var onToggleExpanded: (() -> Void)? = nil
+    var reservesTopTrailingControl = false
 
     private var session: CodexConversationSession? { target.map { store.session(for: $0) } }
-    private var showsContents: Bool { isExpanded || keepsContentsMounted }
 
     var body: some View {
         VStack(spacing: 0) {
-            if compactHeight == nil && !showsContents {
-                collapsedSidebar
+            header
+            Divider()
+            if let target, let session {
+                chatContents(target: target, session: session)
+                    .id(session.key)
             } else {
-                header
-                if showsContents {
-                    Divider()
-                    if let target, let session {
-                        chatContents(target: target, session: session)
-                            .id(session.key)
-                    } else {
-                        VStack(spacing: 12) {
-                            Image(systemName: "bubble.left.and.bubble.right").font(.largeTitle)
-                            Text("Choose a chat").font(.headline)
-                            Text("Continue a conversation with text, pictures, and your canvas.")
-                                .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                            Button("Choose a Codex chat", action: onChooseChat)
-                                .buttonStyle(.borderedProminent).tint(Color.ochre).foregroundStyle(Color.onAccent)
-                                .frame(minHeight: 44)
-                                .accessibilityIdentifier("chat.destination")
-                        }
-                        .padding(20)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
+                VStack(spacing: 12) {
+                    Image(systemName: "bubble.left.and.bubble.right").font(.largeTitle)
+                    Text("Choose a chat").font(.headline)
+                    Text("Continue a conversation with text, pictures, and your canvas.")
+                        .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    Button("Choose a Codex chat", action: onChooseChat)
+                        .buttonStyle(.borderedProminent).tint(Color.ochre).foregroundStyle(Color.onAccent)
+                        .frame(minHeight: 44)
+                        .accessibilityIdentifier("chat.destination")
                 }
+                .padding(20)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .frame(height: showsContents ? compactHeight : nil)
-        .frame(maxHeight: showsContents && compactHeight == nil ? .infinity : nil)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .foregroundStyle(Color.charcoal)
         .background(Color.panelBackground, in: RoundedRectangle(cornerRadius: 12))
         .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -59,28 +48,16 @@ struct CodexRepliesPanel: View {
 
     private var header: some View {
         HStack(spacing: 0) {
-            Button(action: toggleExpanded) {
-                HStack(spacing: 8) {
-                    Image(systemName: "bubble.left.and.bubble.right")
-                    Text("Chat").font(.headline)
-                    if session?.isBusy == true { ProgressView().controlSize(.small) }
-                    Spacer(minLength: 0)
-                    Image(systemName: compactHeight == nil ? (layoutControls?.side == .left ? "chevron.left" : "chevron.right") : (isExpanded ? "chevron.down" : "chevron.up"))
-                        .font(.caption.weight(.semibold))
-                }
-                .padding(.leading, 14)
-                .padding(.trailing, 10)
-                .frame(minHeight: 48)
-                .contentShape(Rectangle())
+            HStack(spacing: 8) {
+                Text("Chat").font(.headline).lineLimit(1)
+                if session?.isBusy == true { ProgressView().controlSize(.small) }
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel(isExpanded ? "Collapse chat" : "Show chat")
-            .accessibilityValue(isExpanded ? "Expanded" : "Collapsed")
-            .accessibilityIdentifier("canvas.repliesToggle")
-            if showsContents, let layoutControls {
+            .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 8)
+            if let layoutControls {
                 CanvasChatLayoutMenu(controls: layoutControls)
             }
-            if showsContents, let onExpand {
+            if let onExpand {
                 Button(action: onExpand) {
                     Image(systemName: isFocused ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
                         .frame(width: 44, height: 44).contentShape(Rectangle())
@@ -99,29 +76,10 @@ struct CodexRepliesPanel: View {
             .accessibilityLabel("Refresh conversation")
             .accessibilityHint("Loads this chat without sending another message.")
             .accessibilityIdentifier("codex.refreshReplies")
-            .padding(.trailing, 4)
         }
-    }
-
-    private var collapsedSidebar: some View {
-        Button(action: toggleExpanded) {
-            VStack(spacing: 6) {
-                Image(systemName: "bubble.left.and.bubble.right").font(.body.weight(.semibold))
-                if session?.isBusy == true { ProgressView().controlSize(.small) }
-            }
-            .frame(maxWidth: .infinity, minHeight: 56)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Show chat")
-        .accessibilityValue("Collapsed")
-        .accessibilityIdentifier("canvas.repliesToggle")
-    }
-
-    private func toggleExpanded() {
-        if let onToggleExpanded { onToggleExpanded(); return }
-        if isExpanded { onComposerFocusChanged(false) }
-        withAnimation(.easeInOut(duration: 0.2)) { isExpanded.toggle() }
+        .padding(.leading, 14)
+        .padding(.trailing, reservesTopTrailingControl ? 68 : 12)
+        .padding(.vertical, 16)
     }
 
     private func chatContents(target: CodexChatTarget, session: CodexConversationSession) -> some View {

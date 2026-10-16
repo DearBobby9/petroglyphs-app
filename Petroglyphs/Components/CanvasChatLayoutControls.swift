@@ -139,11 +139,12 @@ struct CanvasChatDivider: View {
 /// usable width. The content stays mounted through both collapsed endpoints.
 struct CanvasChatPane<Content: View>: View {
     let minimumWidth: CGFloat
+    var minimumHeight: CGFloat = 0
     let alignment: Alignment
     @ViewBuilder let content: Content
 
     var body: some View {
-        CanvasChatPaneLayout(minimumWidth: minimumWidth, alignment: alignment) {
+        CanvasChatPaneLayout(minimumWidth: minimumWidth, minimumHeight: minimumHeight, alignment: alignment) {
             content
         }
         .clipped()
@@ -152,6 +153,7 @@ struct CanvasChatPane<Content: View>: View {
 
 private struct CanvasChatPaneLayout: Layout {
     let minimumWidth: CGFloat
+    let minimumHeight: CGFloat
     let alignment: Alignment
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
@@ -161,8 +163,9 @@ private struct CanvasChatPaneLayout: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let contentWidth = max(minimumWidth, bounds.width)
+        let contentHeight = max(minimumHeight, bounds.height)
         let x = alignment == .trailing ? bounds.maxX - contentWidth : bounds.minX
         subviews.first?.place(at: CGPoint(x: x, y: bounds.minY), anchor: .topLeading,
-                              proposal: ProposedViewSize(width: contentWidth, height: bounds.height))
+                              proposal: ProposedViewSize(width: contentWidth, height: contentHeight))
     }
 }

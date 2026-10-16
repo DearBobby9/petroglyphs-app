@@ -9,9 +9,8 @@ enum CanvasChatSide: String, CaseIterable {
 struct CanvasChatLayout: Layout {
     let mode: CanvasChatLayoutMode
     let side: CanvasChatSide
-    let chatFraction: Double
-    let isExpanded: Bool
-    let stackedChatHeight: CGFloat
+    /// Distance from the chat's outside edge to the middle of the gap, on either axis.
+    /// Zero and the full axis length are the collapsed endpoints of the same layout.
     var chatExtent: CGFloat
 
     var animatableData: CGFloat {
@@ -25,14 +24,7 @@ struct CanvasChatLayout: Layout {
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard !subviews.isEmpty else { return }
-        let collapsedHeight = mode == .stacked && !isExpanded && subviews.count > 2
-            ? subviews[2].sizeThatFits(ProposedViewSize(width: bounds.width, height: nil)).height
-            : 0
-        let frames = CanvasChatFrames(
-            size: bounds.size, mode: mode, side: side, chatFraction: chatFraction,
-            isExpanded: isExpanded, stackedChatHeight: stackedChatHeight,
-            collapsedChatHeight: collapsedHeight, chatExtent: chatExtent
-        )
+        let frames = CanvasChatFrames(size: bounds.size, mode: mode, side: side, chatExtent: chatExtent)
         let placements = [frames.canvas, frames.divider, frames.chat]
         for (index, subview) in subviews.enumerated() where index < placements.count {
             let frame = placements[index]
@@ -43,7 +35,7 @@ struct CanvasChatLayout: Layout {
 }
 
 enum CanvasChatLayoutMode {
-    case canvasOnly, sideBySide, stacked, chatOnly
+    case canvasOnly, sideBySide, stacked
 }
 
 struct CanvasChatFrames {
@@ -93,23 +85,17 @@ struct CanvasChatFrames {
         min(min(520, max(300, availableHeight * 0.43)), max(0, availableHeight - 160 - stackedSpacing))
     }
 
-    init(size: CGSize, mode: CanvasChatLayoutMode, side: CanvasChatSide, chatFraction: Double,
-         isExpanded: Bool, stackedChatHeight: CGFloat, collapsedChatHeight: CGFloat = 48,
-         chatExtent: CGFloat? = nil) {
+    init(size: CGSize, mode: CanvasChatLayoutMode, side: CanvasChatSide, chatExtent: CGFloat) {
         let width = max(0, size.width)
         let height = max(0, size.height)
+        let proposedExtent = chatExtent.isFinite ? chatExtent : 0
         switch mode {
         case .canvasOnly:
             canvas = CGRect(x: 0, y: 0, width: width, height: height)
             divider = .zero
             chat = .zero
-        case .chatOnly:
-            canvas = .zero
-            divider = .zero
-            chat = CGRect(x: 0, y: 0, width: width, height: height)
         case .sideBySide:
-            let proposedExtent = chatExtent ?? (isExpanded ? Self.chatExtent(fraction: chatFraction, availableWidth: width) : 0)
-            let extent = min(width, max(0, proposedExtent.isFinite ? proposedExtent : 0))
+            let extent = min(width, max(0, proposedExtent))
             let gap = min(Self.dividerWidth, 2 * min(extent, width - extent))
             let chatWidth = max(0, extent - gap / 2)
             let canvasWidth = max(0, width - extent - gap / 2)
@@ -120,9 +106,10 @@ struct CanvasChatFrames {
                 : .zero
             chat = CGRect(x: side == .left ? 0 : canvasWidth + gap, y: 0, width: chatWidth, height: height)
         case .stacked:
-            let chatHeight = min(height, max(0, isExpanded ? stackedChatHeight : collapsedChatHeight))
-            let gap = min(Self.stackedSpacing, max(0, height - chatHeight))
-            let canvasHeight = max(0, height - chatHeight - gap)
+            let extent = min(height, max(0, proposedExtent))
+            let gap = min(Self.stackedSpacing, 2 * min(extent, height - extent))
+            let chatHeight = max(0, extent - gap / 2)
+            let canvasHeight = max(0, height - extent - gap / 2)
             canvas = CGRect(x: 0, y: 0, width: width, height: canvasHeight)
             divider = .zero
             chat = CGRect(x: 0, y: canvasHeight + gap, width: width, height: chatHeight)
