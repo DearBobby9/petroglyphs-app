@@ -20,6 +20,7 @@ struct CodexRepliesPanel: View {
     var onExpand: (() -> Void)? = nil
     var layoutControls: CanvasChatLayoutControls? = nil
     var reservesTopTrailingControl = false
+    var onShowDrafts: () -> Void = {}
 
     private var session: CodexConversationSession? { target.map { store.session(for: $0) } }
 
@@ -83,6 +84,7 @@ struct CodexRepliesPanel: View {
                 } label: { Label(newChat == nil ? "Refresh conversation" : "Refresh creation status", systemImage: "arrow.clockwise") }
                 .disabled((target == nil && newChat == nil) || (newChat?.isBusy ?? (session?.isRefreshing == true)))
                 .accessibilityIdentifier("codex.refreshReplies")
+                Button("Drafts and pending", systemImage: "tray.full", action: onShowDrafts)
                 if let layoutControls { CanvasChatLayoutMenuItems(controls: layoutControls) }
             } label: {
                 Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle())

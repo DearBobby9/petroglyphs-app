@@ -14,6 +14,7 @@ struct CanvasPageView: View {
     @AppStorage("codexChatWidthFraction") private var chatWidthFraction = CanvasChatFrames.defaultChatFraction
     @AppStorage("codexCanvasCollapsed") private var chatFocused = false
     private var vm: CanvasViewModel { appState.canvasViewModel }
+    @State private var showSavedDrafts = false
     @State private var pickerServer: PickerServer?
     @State private var showBackgroundPicker = false
     @State private var composerFocused = false
@@ -27,6 +28,7 @@ struct CanvasPageView: View {
     private struct PickerServer: Identifiable {
         let url: URL
         var creationOnly = false
+        var independent = false
         var id: String { "\(url.absoluteString):\(creationOnly)" }
     }
 
@@ -166,7 +168,8 @@ struct CanvasPageView: View {
                                 },
                                 onExpand: { toggleChatFocus(isFillingPage: chatFillsPage) },
                                 layoutControls: controls,
-                                reservesTopTrailingControl: chatFillsPage || (useSidebar && chatSide == .right)
+                                reservesTopTrailingControl: chatFillsPage || (useSidebar && chatSide == .right),
+                                onShowDrafts: { appState.refreshCreationDrafts(); showSavedDrafts = true }
                             )
                         }
                         .allowsHitTesting(repliesExpanded)
@@ -246,9 +249,17 @@ struct CanvasPageView: View {
                                   initialHostID: newChat?.host.id ?? selectedTarget?.host.id,
                                   onChoose: { appState.newCodexChat = nil },
                                   onNewChat: { host, project in
-                                      appState.startNewChat(project: project, host: host, serverURL: server.url)
+                                      if server.independent { appState.startIndependentChat(project: project, host: host, serverURL: server.url) }
+                                      else { appState.startNewChat(project: project, host: host, serverURL: server.url) }
                                   })
                 .presentationDetents([.large])
+        }
+        .sheet(isPresented: $showSavedDrafts) {
+            CodexDraftsSheet {
+                if let url = connectionMonitor.serverURL {
+                    pickerServer = PickerServer(url: url, creationOnly: true, independent: true)
+                }
+            }
         }
         .alert("Could not send drawing", isPresented: Binding(
             get: { vm.castError != nil },
@@ -367,6 +378,11 @@ struct CanvasPageView: View {
                             .disabled(!vm.canUndo).keyboardShortcut("z", modifiers: .command)
                         Button("Redo", systemImage: "arrow.uturn.forward") { vm.redo() }
                             .disabled(!vm.canRedo).keyboardShortcut("z", modifiers: [.command, .shift])
+                        Divider()
+                        Button("Drafts and pending", systemImage: "tray.full") {
+                            appState.refreshCreationDrafts()
+                            showSavedDrafts = true
+                        }
                         Divider()
                         Button("Clear ink", systemImage: "trash", role: .destructive) {
                             vm.clear()

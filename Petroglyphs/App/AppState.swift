@@ -9,6 +9,7 @@ enum AppPage {
 @MainActor
 class AppState {
     let canvasViewModel = CanvasViewModel()
+    private(set) var creationDrafts: [CodexCreationDraftSummary] = []
     var currentPage: AppPage = .landing
     var selectedCodexChat: CodexChatTarget? {
         didSet {
@@ -28,6 +29,7 @@ class AppState {
             } else {
                 UserDefaults.standard.removeObject(forKey: "newCodexChatDestination")
             }
+            refreshCreationDrafts()
         }
     }
 
@@ -39,6 +41,15 @@ class AppState {
            let destination = try? JSONDecoder().decode(CodexNewChatDestination.self, from: data) {
             newCodexChat = CodexProjectCreationModel(project: destination.project, host: destination.host, serverURL: destination.serverURL, draftID: destination.draftID)
         }
+        refreshCreationDrafts()
+    }
+
+    func refreshCreationDrafts() { creationDrafts = CodexProjectCreationModel.savedDrafts() }
+
+    func resumeCreationDraft(_ summary: CodexCreationDraftSummary) {
+        guard let destination = summary.destination, summary.recoveryError == nil else { return }
+        newCodexChat = CodexProjectCreationModel(project: destination.project, host: destination.host,
+            serverURL: destination.serverURL, draftID: summary.id)
     }
 
     func startNewChat(project: CodexProject, host: CodexHost, serverURL: URL) {

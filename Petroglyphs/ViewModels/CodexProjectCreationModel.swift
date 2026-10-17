@@ -41,13 +41,40 @@ final class CodexProjectCreationModel {
         self.host = host
         self.serverURL = serverURL
         self.network = network
-        let root = storageRoot ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("CodexProjectCreations", isDirectory: true)
+        let root = storageRoot ?? Self.defaultStorageRoot
         let key = Data("\(serverURL.absoluteString)\n\(host.id)\n\(project.id)".utf8)
         let name = SHA256.hash(data: key).map { String(format: "%02x", $0) }.joined()
         self.draftID = draftID ?? name
         fileURL = root.appendingPathComponent(self.draftID).appendingPathExtension("json")
         restore()
+    }
+
+    static var defaultStorageRoot: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("CodexProjectCreations", isDirectory: true)
+    }
+
+    static func savedDrafts(storageRoot: URL? = nil) -> [CodexCreationDraftSummary] {
+        let root = storageRoot ?? defaultStorageRoot
+        guard let files = try? FileManager.default.contentsOfDirectory(at: root, includingPropertiesForKeys: [.contentModificationDateKey]) else { return [] }
+        return files.filter { $0.pathExtension == "json" }.map { file in
+            let id = file.deletingPathExtension().lastPathComponent
+            let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            do {
+                let saved = try JSONDecoder().decode(SavedCreation.self, from: Data(contentsOf: file))
+                guard (saved.version ?? 1) <= 2 else { throw NetworkService.NetworkError.badResponse }
+                return CodexCreationDraftSummary(id: id, destination: saved.destination,
+                    title: saved.request?.title ?? saved.draft?.title ?? "",
+                    prompt: saved.request?.prompt ?? saved.draft?.prompt ?? "",
+                    updatedAt: saved.updatedAt ?? modified, state: saved.receipt?.state.rawValue ?? (saved.request == nil ? "draft" : "unknown"),
+                    requestID: saved.request?.id,
+                    recoveryError: saved.destination == nil ? "This older record has no saved destination. Open its original project to recover it." : nil)
+            } catch {
+                return CodexCreationDraftSummary(id: id, destination: nil, title: "Saved record needs recovery", prompt: "",
+                    updatedAt: modified, state: "unreadable", requestID: nil,
+                    recoveryError: "The saved bytes are protected. This record could not be read by this version.")
+            }
+        }.sorted { $0.updatedAt == $1.updatedAt ? $0.id < $1.id : $0.updatedAt > $1.updatedAt }
     }
 
     var isBusy: Bool { isSubmitting || isChecking || isRetrying }

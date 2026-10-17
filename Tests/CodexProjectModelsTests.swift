@@ -739,6 +739,33 @@ final class CodexProjectModelsTests: XCTestCase {
     }
 
     @MainActor
+    func testDraftListKeepsIndependentTasksAndUnknownCreationDiscoverableAfterRestart() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ProjectNetworkFixture()
+        await network.configure(post: .timeout, receipt: .unknown)
+        let old = creation(network, root: root)
+        old.prompt = "Unknown original task"
+        await old.submit()
+        let new = CodexProjectCreationModel(project: old.project, host: old.host, serverURL: old.serverURL,
+            network: network, storageRoot: root, draftID: UUID().uuidString.lowercased())
+        new.prompt = "Independent task in the same project"
+        let entries = CodexProjectCreationModel.savedDrafts(storageRoot: root)
+        XCTAssertEqual(entries.count, 2)
+        let original = try XCTUnwrap(entries.first { $0.id == old.draftID })
+        XCTAssertEqual(original.state, "unknown")
+        XCTAssertEqual(original.requestID, old.request?.id)
+        XCTAssertEqual(original.destination?.project.id, old.project.id)
+        let reopened = CodexProjectCreationModel(project: old.project, host: old.host, serverURL: old.serverURL,
+            network: network, storageRoot: root, draftID: original.id)
+        XCTAssertEqual(reopened.request, old.request)
+        XCTAssertEqual(reopened.prompt, "Unknown original task")
+        XCTAssertEqual(entries.first { $0.id == new.draftID }?.prompt, new.prompt)
+        let posts = await network.posts
+        XCTAssertEqual(posts.count, 1)
+    }
+
+    @MainActor
     private func creation(_ network: ProjectNetworkFixture, root: URL, host: String = "local", projectID: String = "project-local", base: URL? = nil) -> CodexProjectCreationModel {
         CodexProjectCreationModel(
             project: CodexProject(id: projectID, name: "Project", path: "/project", canCreate: true, reason: nil),

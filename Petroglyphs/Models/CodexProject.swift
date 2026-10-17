@@ -62,3 +62,19 @@ struct CodexNewChatDestination: Codable {
     let project: CodexProject
     var draftID: String? = nil
 }
+
+struct CodexCreationDraftSummary: Identifiable {
+    let id: String
+    let destination: CodexNewChatDestination?
+    let title: String
+    let prompt: String
+    let updatedAt: Date
+    let state: String
+    let requestID: String?
+    let recoveryError: String?
+
+    var displayTitle: String {
+        let text = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return text.isEmpty ? String(prompt.prefix(80)) : text
+    }
+}
