@@ -11,10 +11,13 @@ class AppState {
     let canvasViewModel = CanvasViewModel()
     private(set) var creationDrafts: [CodexCreationDraftSummary] = []
     var currentPage: AppPage = .landing
+    private let recentChatStore = CodexRecentChatStore()
+    var recentCodexChats: [CodexChatTarget] { recentChatStore.targets }
     var selectedCodexChat: CodexChatTarget? {
         didSet {
             if let selectedCodexChat, let data = try? JSONEncoder().encode(selectedCodexChat) {
                 UserDefaults.standard.set(data, forKey: "selectedCodexChat")
+                recentChatStore.remember(selectedCodexChat)
             } else {
                 UserDefaults.standard.removeObject(forKey: "selectedCodexChat")
             }
@@ -41,6 +44,7 @@ class AppState {
            let destination = try? JSONDecoder().decode(CodexNewChatDestination.self, from: data) {
             newCodexChat = CodexProjectCreationModel(project: destination.project, host: destination.host, serverURL: destination.serverURL, draftID: destination.draftID)
         }
+        if let selectedCodexChat { recentChatStore.remember(selectedCodexChat) }
         refreshCreationDrafts()
     }
 

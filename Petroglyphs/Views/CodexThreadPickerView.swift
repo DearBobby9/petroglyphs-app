@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CodexThreadPickerView: View {
+    @Environment(AppState.self) private var appState
     let serverURL: URL
     @Binding var selection: CodexChatTarget?
     let creationOnly: Bool
@@ -60,6 +61,7 @@ struct CodexThreadPickerView: View {
                 hostPicker
                 if !creationOnly { scopePicker }
                 searchField
+                if !creationOnly { cachedChats }
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -175,7 +177,6 @@ struct CodexThreadPickerView: View {
                 .submitLabel(.search)
                 .accessibilityLabel(scope == .chats ? "Search Codex chats" : "Search Codex projects")
                 .accessibilityIdentifier("codex.search")
-                .disabled(selectedHost?.canSelect != true || isLoadingHosts)
             if !searchText.isEmpty {
                 Button {
                     searchText = ""
@@ -191,6 +192,44 @@ struct CodexThreadPickerView: View {
         .frame(minHeight: 44)
         .background(Color.panelBackground, in: RoundedRectangle(cornerRadius: 10))
         .padding(16)
+    }
+
+    private var cachedTargets: [CodexChatTarget] {
+        appState.recentCodexChats.filter {
+            $0.serverURL == serverURL && (searchText.isEmpty || $0.thread.displayTitle.localizedCaseInsensitiveContains(searchText))
+        }
+    }
+
+    @ViewBuilder
+    private var cachedChats: some View {
+        if !cachedTargets.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Recent and cached chats").font(.caption.weight(.semibold))
+                ScrollView(.horizontal) {
+                    HStack(spacing: 10) {
+                        ForEach(cachedTargets, id: \.thread.id) { target in
+                            Button {
+                                selection = target
+                                onChoose()
+                                dismiss()
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(target.thread.displayTitle).font(.callout.weight(.semibold)).lineLimit(2)
+                                    Text(target.host.name).font(.caption).foregroundStyle(.secondary)
+                                }
+                                .frame(width: 180, alignment: .leading).padding(10)
+                                .background(Color.panelBackground, in: RoundedRectangle(cornerRadius: 10))
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityIdentifier("codex.cached.\(target.thread.id)")
+                        }
+                    }
+                }
+                Text("Cached chats can be read and edited offline. Sending requires a current connection.")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 16).padding(.bottom, 12)
+        }
     }
 
     @ViewBuilder

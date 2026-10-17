@@ -10,6 +10,8 @@ targets:
     platform: iOS
     sources:
       - CodexProjectModelsTests.swift
+      - CodexRecentChatStoreTests.swift
+      - ../Petroglyphs/Services/CodexRecentChatStore.swift
       - ../Petroglyphs/Models/CodexProject.swift
       - ../Petroglyphs/Models/CodexModelSettings.swift
       - ../Petroglyphs/Models/CodexHost.swift
