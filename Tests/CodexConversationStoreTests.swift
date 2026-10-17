@@ -643,12 +643,14 @@ final class CodexConversationStoreTests: XCTestCase {
     }
 
     @MainActor
-    func testUnsentCreationHandoffPreservesExistingDraftAndIsIdempotentAcrossRestart() throws {
+    func testUnsentCreationHandoffPreservesExistingDraftAndIsIdempotentAcrossRestart() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let destination = target()
-        let request = CodexCreateChatRequest(id: UUID().uuidString.lowercased(), hostId: destination.host.id,
+        let bytes = imageBytes()
+        var request = CodexCreateChatRequest(id: UUID().uuidString.lowercased(), hostId: destination.host.id,
             projectId: "project", prompt: "Original first requirement", title: "New chat")
+        request.attachments = [CodexCreateChatAttachment(id: "source-image", name: "Canvas.png", mimeType: "image/png", dataBase64: bytes.base64EncodedString())]
         var receipt = CodexChatCreationReceipt(id: request.id, hostId: request.hostId, projectId: request.projectId,
             state: .unknown, thread: destination.thread, error: nil, notice: nil)
         receipt.firstMessageState = "not_sent"
@@ -661,6 +663,9 @@ final class CodexConversationStoreTests: XCTestCase {
         XCTAssertEqual(restored.session(for: destination).recoveredDrafts.count, 1)
         try restored.restoreRecoveredDraft(request.id, for: destination)
         XCTAssertEqual(restored.session(for: destination).draft.text, request.prompt)
+        let attachment = try XCTUnwrap(restored.session(for: destination).draft.attachments.first)
+        let transferred = try await restored.imageData(attachment.messageAttachment, for: destination)
+        XCTAssertEqual(transferred, bytes)
         XCTAssertEqual(restored.session(for: destination).recoveredDrafts.first?.draft.text, "Existing draft")
         XCTAssertTrue(restored.session(for: destination).outgoing.isEmpty)
     }

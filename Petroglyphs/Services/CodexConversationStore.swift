@@ -126,14 +126,18 @@ final class CodexConversationStore {
         if session.handedOffCreationIDs.contains(request.id) { return }
         let previous = (session.draft, session.outgoing, session.recoveredDrafts, session.handedOffCreationIDs)
         let selection = request.selection.map { CodexDraftModelSelection(model: $0.model, reasoningEffort: $0.reasoningEffort) }
-        let draft = CodexMessageDraft(text: request.prompt, modelSelection: selection)
+        let attachments = try request.attachments.map { image -> CodexDraftAttachment in
+            guard let bytes = image.imageData else { throw ConversationError.imageUnavailable }
+            return try persistImage(CodexImportedImage(data: bytes, name: image.name, mimeType: image.mimeType), for: session.key)
+        }
+        let draft = CodexMessageDraft(text: request.prompt, attachments: attachments, modelSelection: selection)
         if receipt.firstMessageState == "not_sent" {
             if session.draft.isEmpty { session.draft = draft }
             else { session.recoveredDrafts.append(CodexRecoveredDraft(id: request.id, draft: draft, createdAt: Date())) }
         } else {
             let id = receipt.firstMessageRequestId ?? request.id
             if !session.outgoing.contains(where: { $0.id == id }) {
-                var local = CodexLocalMessage(id: id, text: request.prompt, attachments: [], createdAt: Date(),
+                var local = CodexLocalMessage(id: id, text: request.prompt, attachments: attachments, createdAt: Date(),
                     state: receipt.firstMessageState == "sent" || receipt.state == .completed ? .queued : .unknown,
                     notice: "This is the original first message. Check its receipt before sending it again.", selection: request.selection)
                 local.sourceCreationID = request.id

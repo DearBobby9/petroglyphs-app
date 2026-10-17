@@ -34,7 +34,7 @@ struct CodexRepliesPanel: View {
                 CodexNewChatPanel(model: newChat, modelSettings: modelSettings, isConnected: isConnected,
                                   onCancel: onCancelNewChat, onChooseDestination: onNewChat,
                                   onRefreshModels: onRefreshModels, onFocusChanged: onComposerFocusChanged,
-                                  onCreated: { onCreated($0, newChat) })
+                                  onCreated: { onCreated($0, newChat) }, onAddCanvas: onAddCanvas)
                     .id(newChat.draftID)
             } else if let target, let session {
                 chatContents(target: target, session: session)

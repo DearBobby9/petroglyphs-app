@@ -12,6 +12,7 @@ final class CodexProjectCreationModel {
     private(set) var destinationNeedsValidation = false
     var title = "" { didSet { saveDraftChange() } }
     var prompt = "" { didSet { saveDraftChange() } }
+    private(set) var attachments: [CodexCreateChatAttachment] = []
     var modelSelection: CodexDraftModelSelection? { didSet { saveDraftChange() } }
     private(set) var request: CodexCreateChatRequest?
     private(set) var receipt: CodexChatCreationReceipt?
@@ -86,7 +87,8 @@ final class CodexProjectCreationModel {
             && !destinationNeedsValidation
             && (modelSelection == nil || modelSelection?.selection != nil)
             && title.utf16.count <= 120 && prompt.utf16.count <= 20_000
-            && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && (!prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !attachments.isEmpty)
+            && (attachments.isEmpty || project.supportsFirstMessageAttachments)
     }
     var canRetryOriginal: Bool { project.canCreate && host.canSelect && isConfirmedMissing && request != nil && receipt?.state != .failed && receipt?.attemptId == nil && retryPendingAttemptId == nil && !isBusy && storageError == nil }
     var canRetryCreation: Bool {
@@ -143,7 +145,7 @@ final class CodexProjectCreationModel {
         self.project = project
         self.host = host
         self.serverURL = serverURL
-        destinationNeedsValidation = modelSelection != nil
+        destinationNeedsValidation = modelSelection != nil || !attachments.isEmpty
         if save() { return true }
         (self.project, self.host, self.serverURL, destinationNeedsValidation) = previous
         return false
@@ -151,16 +153,49 @@ final class CodexProjectCreationModel {
 
     func validateDestination(using settings: CodexModelSettingsModel) {
         guard request == nil else { return }
+        if !attachments.isEmpty && !project.supportsFirstMessageAttachments {
+            destinationNeedsValidation = true
+            error = "This destination cannot create a chat with images. Choose another project or remove the images."
+            return
+        }
         guard settings.matches(from: serverURL, hostId: host.id, threadId: nil) else {
             destinationNeedsValidation = modelSelection != nil
             return
         }
-        if let reason = settings.validationMessage(for: modelSelection) {
+        if let reason = settings.validationMessage(for: modelSelection, hasImages: !attachments.isEmpty) {
             destinationNeedsValidation = true
             error = reason
         } else {
             destinationNeedsValidation = false
             error = nil
+        }
+    }
+
+    func addImage(_ image: CodexImportedImage) throws {
+        guard request == nil, !restorationFailed, project.supportsFirstMessageAttachments else { throw CreationAttachmentError.unsupportedDestination }
+        guard ["image/png", "image/jpeg"].contains(image.mimeType) else { throw CodexAttachmentImporter.ImportError.unsupported }
+        guard image.data.count <= CodexAttachmentImporter.maximumImageBytes else { throw CodexAttachmentImporter.ImportError.tooLarge }
+        guard attachments.count < CodexAttachmentImporter.maximumCount else { throw CodexAttachmentImporter.ImportError.tooMany }
+        guard attachments.reduce(image.data.count, { $0 + ($1.imageData?.count ?? 0) }) <= CodexAttachmentImporter.maximumTotalBytes else { throw CodexAttachmentImporter.ImportError.totalTooLarge }
+        let previous = attachments
+        attachments.append(CodexCreateChatAttachment(id: UUID().uuidString.lowercased(), name: image.name, mimeType: image.mimeType, dataBase64: image.data.base64EncodedString()))
+        guard save() else { attachments = previous; throw CreationAttachmentError.saveFailed }
+    }
+
+    func removeAttachment(_ id: String) {
+        guard request == nil, !restorationFailed else { return }
+        let previous = attachments
+        attachments.removeAll { $0.id == id }
+        if !save() { attachments = previous }
+    }
+
+    enum CreationAttachmentError: LocalizedError {
+        case unsupportedDestination, saveFailed
+        var errorDescription: String? {
+            switch self {
+            case .unsupportedDestination: "This destination does not support first-message images. The draft is kept."
+            case .saveFailed: "The image could not be saved with this draft. Free storage before trying again."
+            }
         }
     }
 
@@ -170,7 +205,7 @@ final class CodexProjectCreationModel {
         request = CodexCreateChatRequest(id: UUID().uuidString.lowercased(), hostId: host.id, projectId: project.id,
                                          prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
                                          title: cleanedTitle.isEmpty ? nil : cleanedTitle,
-                                         selection: modelSelection?.selection)
+                                         selection: modelSelection?.selection, attachments: attachments)
         // Save before issuing the POST so dismissing or relaunching never generates a
         // second request after an ambiguous network result.
         guard save() else { request = nil; return }
@@ -289,6 +324,7 @@ final class CodexProjectCreationModel {
         guard canStartNewRequest, let request else { return }
         title = request.title ?? ""
         prompt = request.prompt
+        attachments = request.attachments
         modelSelection = request.selection.map { CodexDraftModelSelection(model: $0.model, reasoningEffort: $0.reasoningEffort) }
         clearFailedRequestAssociation()
     }
@@ -388,6 +424,7 @@ final class CodexProjectCreationModel {
             localValidationRejection = saved.localValidationRejection ?? false
             title = saved.request?.title ?? saved.draft?.title ?? ""
             prompt = saved.request?.prompt ?? saved.draft?.prompt ?? ""
+            attachments = saved.request?.attachments ?? saved.draft?.attachments ?? []
             if let selection = saved.request?.selection {
                 modelSelection = CodexDraftModelSelection(model: selection.model, reasoningEffort: selection.reasoningEffort)
             } else {
@@ -408,7 +445,7 @@ final class CodexProjectCreationModel {
         guard !restorationFailed else { return false }
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let draft = CreationDraft(title: title, prompt: prompt, modelSelection: modelSelection)
+            let draft = CreationDraft(title: title, prompt: prompt, modelSelection: modelSelection, attachments: attachments)
             updatedAt = Date()
             let data = try JSONEncoder().encode(SavedCreation(version: 2, draftID: draftID,
                                                              destination: CodexNewChatDestination(serverURL: serverURL, host: host, project: project),
@@ -446,5 +483,6 @@ final class CodexProjectCreationModel {
         let title: String
         let prompt: String
         let modelSelection: CodexDraftModelSelection?
+        var attachments: [CodexCreateChatAttachment]? = nil
     }
 }

@@ -852,6 +852,55 @@ final class CodexProjectModelsTests: XCTestCase {
     }
 
     @MainActor
+    func testFirstMessageImagesStayImmutableAcrossTimeoutRestartAndExplicitRetry() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ProjectNetworkFixture()
+        await network.configure(post: .timeout, receipt: .missing)
+        let seed = creation(network, root: root)
+        var project = seed.project
+        project.supportsFirstMessageAttachments = true
+        let id = UUID().uuidString.lowercased()
+        let model = CodexProjectCreationModel(project: project, host: seed.host, serverURL: server,
+            network: network, storageRoot: root, draftID: id)
+        model.prompt = "Implement this drawing"
+        let bytes = Data([137, 80, 78, 71, 1, 2, 3])
+        try model.addImage(CodexImportedImage(data: bytes, name: "Canvas.png", mimeType: "image/png"))
+        await model.submit()
+        let original = try XCTUnwrap(model.request)
+        model.removeAttachment(original.attachments[0].id)
+        XCTAssertEqual(model.attachments.count, 1, "Submitted attachments cannot change.")
+        let restored = CodexProjectCreationModel(project: project, host: seed.host, serverURL: server,
+            network: network, storageRoot: root, draftID: id)
+        XCTAssertEqual(restored.attachments[0].imageData, bytes)
+        XCTAssertEqual(restored.request, original)
+        await restored.checkStatus()
+        await network.configure(post: .completed, receipt: .completed)
+        await restored.retryOriginal()
+        let posts = await network.posts
+        XCTAssertEqual(posts, [original, original])
+    }
+
+    @MainActor
+    func testUnsupportedImageDestinationKeepsDraftButBlocksCreation() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ProjectNetworkFixture()
+        let seed = creation(network, root: root)
+        var project = seed.project
+        project.supportsFirstMessageAttachments = true
+        let model = CodexProjectCreationModel(project: project, host: seed.host, serverURL: server,
+            network: network, storageRoot: root, draftID: UUID().uuidString.lowercased())
+        try model.addImage(CodexImportedImage(data: Data([1, 2, 3]), name: "Snapshot.png", mimeType: "image/png"))
+        XCTAssertTrue(model.canSubmit, "An image-only first requirement is complete input.")
+        XCTAssertTrue(model.changeDestination(project: seed.project, host: seed.host, serverURL: server))
+        XCTAssertFalse(model.canSubmit)
+        XCTAssertEqual(model.attachments.count, 1)
+        let legacy = try JSONDecoder().decode(CodexCreateChatRequest.self, from: Data(#"{"id":"id","hostId":"local","projectId":"project","prompt":"legacy"}"#.utf8))
+        XCTAssertTrue(legacy.attachments.isEmpty)
+    }
+
+    @MainActor
     private func creation(_ network: ProjectNetworkFixture, root: URL, host: String = "local", projectID: String = "project-local", base: URL? = nil) -> CodexProjectCreationModel {
         CodexProjectCreationModel(
             project: CodexProject(id: projectID, name: "Project", path: "/project", canCreate: true, reason: nil),

@@ -74,7 +74,10 @@ struct CanvasPageView: View {
     private var canSend: Bool {
         guard !vm.isCasting, !vm.drawing.strokes.isEmpty else { return false }
         if hasReplyPanel {
-            if let newChat { return newChat.request == nil }
+            if let newChat {
+                return newChat.request == nil && newChat.project.supportsFirstMessageAttachments
+                    && newChat.attachments.count < CodexAttachmentImporter.maximumCount
+            }
             guard let target = selectedTarget else { return false }
             return appState.codexConversation.session(for: target).draft.attachments.count < CodexAttachmentImporter.maximumCount
         }
@@ -89,7 +92,16 @@ struct CanvasPageView: View {
         if requiresThread && !connectionMonitor.isConnected {
             return "Reconnect to your Mac to send. Your drawing stays here."
         }
-        if requiresThread && newChat != nil { return "Add a canvas snapshot to the first message." }
+        if requiresThread, let newChat {
+            if newChat.request != nil { return "The first message has been submitted. Check its status in chat." }
+            if !newChat.project.supportsFirstMessageAttachments {
+                return "This destination has not verified first-message image support. Choose another destination or start with text."
+            }
+            if newChat.attachments.count >= CodexAttachmentImporter.maximumCount {
+                return "This message already has \(CodexAttachmentImporter.maximumCount) images. Remove an image before adding the canvas."
+            }
+            return "Add a canvas snapshot to the first message."
+        }
         if requiresThread && selectedTarget == nil {
             return "Choose a Codex chat before sending."
         }

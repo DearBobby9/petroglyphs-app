@@ -1,4 +1,6 @@
 import SwiftUI
+import PhotosUI
+import UniformTypeIdentifiers
 
 struct CodexNewChatPanel: View {
     let model: CodexProjectCreationModel
@@ -9,13 +11,31 @@ struct CodexNewChatPanel: View {
     let onRefreshModels: () -> Void
     let onFocusChanged: (Bool) -> Void
     let onCreated: (CodexThread) -> Void
+    let onAddCanvas: () -> Data?
     @Environment(\.codexComposerMaximumHeight) private var maximumComposerHeight
     @State private var attachmentNotice: String?
+    @State private var isImporting = false
+    @State private var showPhotos = false
+    @State private var showFiles = false
+    @State private var photos: [PhotosPickerItem] = []
+    @State private var previewAttachment: CodexCreateChatAttachment?
 
     private var canSubmit: Bool {
-        isConnected && model.canSubmit
+        isConnected && model.canSubmit && !isImporting
             && (model.modelSelection == nil || modelSettings.matches(from: model.serverURL, hostId: model.host.id, threadId: nil))
-            && modelSettings.validationMessage(for: model.modelSelection) == nil
+            && modelSettings.validationMessage(for: model.modelSelection, hasImages: !model.attachments.isEmpty) == nil
+    }
+
+    private var attachmentUnavailableReason: String? {
+        if model.request != nil { return "The first message has been submitted. Check its status before adding images." }
+        if !model.project.supportsFirstMessageAttachments {
+            return "This destination has not verified first-message image support. Choose another destination or start with text."
+        }
+        if model.attachments.count >= CodexAttachmentImporter.maximumCount {
+            return "This message already has \(CodexAttachmentImporter.maximumCount) images. Remove an image before adding another."
+        }
+        if isImporting { return "Wait for the current images to finish importing." }
+        return nil
     }
 
     var body: some View {
@@ -53,7 +73,7 @@ struct CodexNewChatPanel: View {
                     if model.request == nil {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("Start a new conversation").font(.headline)
-                            Text("Send a text message to create this chat. You can add drawings and images afterward.")
+                            Text("Create this chat with one complete message, including supported image attachments.")
                                 .font(.callout).foregroundStyle(.secondary)
                         }
                         DisclosureGroup("Chat name (optional)") {
@@ -133,20 +153,38 @@ struct CodexNewChatPanel: View {
             Divider()
             CodexComposerScroll(maximumHeight: maximumComposerHeight) {
             VStack(alignment: .leading, spacing: 8) {
+                if !model.attachments.isEmpty {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 10) {
+                            ForEach(model.attachments) { attachment in
+                                VStack(spacing: 2) {
+                                    Button { previewAttachment = attachment } label: {
+                                        if let data = attachment.imageData, let image = UIImage(data: data) {
+                                            Image(uiImage: image).resizable().scaledToFit().frame(width: 76, height: 68)
+                                        }
+                                    }
+                                    .buttonStyle(.plain).accessibilityLabel("Preview \(attachment.name)")
+                                    if model.request == nil {
+                                        Button("Remove", systemImage: "xmark.circle") { model.removeAttachment(attachment.id) }
+                                            .font(.caption).frame(minHeight: 44)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if isImporting { Text("Adding image…").font(.caption).foregroundStyle(.secondary) }
                 CodexComposerCard(text: $model.prompt, canSubmit: canSubmit, isEditable: model.request == nil,
-                                  isNewChat: true, sendLabel: "Start chat",
-                                  sendHint: "Creates this project chat and sends the first text message.",
+                                  isNewChat: true, hasImages: !model.attachments.isEmpty, sendLabel: "Start chat",
+                                  sendHint: "Creates this project chat and sends the complete first message.",
                                   modelSettings: modelSettings, modelSelection: model.modelSelection,
                                   onModelSelectionChange: { model.modelSelection = $0 }, onRefreshModels: onRefreshModels,
-                                  onFocusChanged: onFocusChanged, onPasteImages: { _ in showAttachmentNotice() }, onSubmit: submit) {
-                    Button(action: showAttachmentNotice) {
-                        Image(systemName: "plus").frame(width: 44, height: 44).contentShape(Rectangle())
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(model.request != nil)
-                    .accessibilityLabel("Attachments after the first message")
-                    .accessibilityIdentifier("chat.addAttachment")
+                                  onFocusChanged: onFocusChanged, onPasteImages: importProviders, onSubmit: submit) {
+                    attachmentMenu
+                }
+                if model.request == nil, !isImporting, let reason = attachmentUnavailableReason {
+                    Text(reason)
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 if let attachmentNotice { Text(attachmentNotice).font(.caption).foregroundStyle(.secondary) }
                 if !isConnected { Text("Reconnect to your Mac to start this chat. Your draft is saved.").font(.caption).foregroundStyle(.secondary) }
@@ -159,6 +197,47 @@ struct CodexNewChatPanel: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat.newDraft")
+        .sheet(item: $previewAttachment) { attachment in
+            CodexImagePreview(items: model.attachments.map { item in
+                CodexImagePreviewItem(id: item.id, name: item.name, load: {
+                    guard let data = item.imageData else { throw CodexConversationStore.ConversationError.imageUnavailable }
+                    return data
+                })
+            }, selectedID: attachment.id, onRemove: model.request == nil ? { model.removeAttachment($0) } : nil)
+        }
+        .photosPicker(isPresented: $showPhotos, selection: $photos,
+                      maxSelectionCount: max(1, CodexAttachmentImporter.maximumCount - model.attachments.count), matching: .images)
+        .onChange(of: photos) { _, items in
+            guard !items.isEmpty else { return }
+            isImporting = true
+            Task {
+                defer { isImporting = false; photos = [] }
+                do {
+                    for item in items {
+                        guard let data = try await item.loadTransferable(type: Data.self) else { throw CodexAttachmentImporter.ImportError.unsupported }
+                        let image = try await Task.detached { try CodexAttachmentImporter.normalize(data, name: "Photo") }.value
+                        try model.addImage(image)
+                    }
+                    model.validateDestination(using: modelSettings)
+                } catch { attachmentNotice = error.localizedDescription }
+            }
+        }
+        .fileImporter(isPresented: $showFiles, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
+            isImporting = true
+            Task {
+                defer { isImporting = false }
+                do {
+                    for url in try result.get() {
+                        let access = url.startAccessingSecurityScopedResource()
+                        defer { if access { url.stopAccessingSecurityScopedResource() } }
+                        let data = try Data(contentsOf: url)
+                        let image = try await Task.detached { try CodexAttachmentImporter.normalize(data, name: url.lastPathComponent) }.value
+                        try model.addImage(image)
+                    }
+                    model.validateDestination(using: modelSettings)
+                } catch { attachmentNotice = error.localizedDescription }
+            }
+        }
         .onChange(of: modelSettings.isLoading, initial: true) { _, loading in
             if !loading { model.validateDestination(using: modelSettings) }
         }
@@ -177,7 +256,36 @@ struct CodexNewChatPanel: View {
         Task { await model.submit() }
     }
 
-    private func showAttachmentNotice() {
-        attachmentNotice = "Send the first text message, then add images or your canvas."
+    private var attachmentMenu: some View {
+        Menu {
+            Button("Photos", systemImage: "photo") { showPhotos = true }
+            Button("Choose image file", systemImage: "folder") { showFiles = true }
+            Button("Add current canvas", systemImage: "pencil.tip.crop.circle.badge.plus") {
+                if let reason = attachmentUnavailableReason { attachmentNotice = reason; return }
+                guard let data = onAddCanvas() else { attachmentNotice = "Add content to the canvas first."; return }
+                do {
+                    try model.addImage(CodexImportedImage(data: data, name: "Canvas.png", mimeType: "image/png"))
+                    model.validateDestination(using: modelSettings)
+                } catch { attachmentNotice = error.localizedDescription }
+            }
+            PasteButton(supportedContentTypes: [.image], payloadAction: importProviders)
+        } label: {
+            Image(systemName: "plus").frame(width: 44, height: 44).contentShape(Rectangle())
+        }
+        .disabled(attachmentUnavailableReason != nil)
+        .accessibilityLabel("Add attachment")
+        .accessibilityIdentifier("chat.addAttachment")
+    }
+
+    private func importProviders(_ providers: [NSItemProvider]) {
+        if let reason = attachmentUnavailableReason { attachmentNotice = reason; return }
+        isImporting = true
+        Task {
+            defer { isImporting = false }
+            do {
+                for provider in providers { try model.addImage(await CodexAttachmentImporter.image(from: provider)) }
+                model.validateDestination(using: modelSettings)
+            } catch { attachmentNotice = error.localizedDescription }
+        }
     }
 }
