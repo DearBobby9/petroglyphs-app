@@ -8,8 +8,31 @@ final class CanvasViewModel {
     private let storageURL: URL
     private var protectsUnreadableDocument = false
     private(set) var storageError: String?
-    private var undoDrawings: [PKDrawing] = []
-    private var redoDrawings: [PKDrawing] = []
+    private struct EditState {
+        let drawing: PKDrawing
+        let referenceImage: CanvasDocumentReference?
+        let exportBounds: CGRect?
+    }
+    private var undoEdits: [EditState] = []
+    private var redoEdits: [EditState] = []
+    var isSelectingContent = false {
+        didSet { if !isSelectingContent { clearSelection() } }
+    }
+    private(set) var selectedStrokeIndexes: Set<Int> = []
+    private(set) var isReferenceSelected = false
+    var hasSelection: Bool { !selectedStrokeIndexes.isEmpty || isReferenceSelected }
+    var selectionDescription: String {
+        let ink = selectedStrokeIndexes.count
+        if isReferenceSelected { return ink == 0 ? "Reference image selected" : "Reference image and \(ink) strokes selected" }
+        return ink == 0 ? "Tap an object or drag a box to select." : "\(ink) strokes selected"
+    }
+    var contentSelectionBounds: CGRect? {
+        var bounds = isReferenceSelected ? (referenceImage?.bounds ?? .null) : CGRect.null
+        for index in selectedStrokeIndexes where drawing.strokes.indices.contains(index) {
+            bounds = bounds.union(drawing.strokes[index].renderBounds)
+        }
+        return bounds.isNull ? nil : bounds
+    }
     private var lastDrawingGestureID: UUID?
 
     var drawing: PKDrawing {
@@ -38,8 +61,8 @@ final class CanvasViewModel {
     private(set) var isAtCoordinateLimit = false
     var hasContent: Bool { !drawing.strokes.isEmpty || referenceImage != nil }
     var snapshotFilename: String { "canvas-\(documentID.uuidString.lowercased())-r\(revision).png" }
-    var canUndo: Bool { !undoDrawings.isEmpty }
-    var canRedo: Bool { !redoDrawings.isEmpty }
+    var canUndo: Bool { !undoEdits.isEmpty }
+    var canRedo: Bool { !redoEdits.isEmpty }
 
     var showCastSuccess = false
     var showWipeAnimation = false
@@ -108,6 +131,7 @@ final class CanvasViewModel {
 
     func setReferenceImage(data: Data, name: String, sourceID: String) throws {
         let reference = try CanvasDocumentReference(data: data, name: name, sourceID: sourceID)
+        recordEdit()
         document.referenceImage = reference
         document.selectedExportBounds = nil
         refreshExportBounds()
@@ -117,6 +141,7 @@ final class CanvasViewModel {
 
     func clearReferenceImage() {
         guard referenceImage != nil else { return }
+        recordEdit()
         document.referenceImage = nil
         refreshExportBounds()
         documentChanged()
@@ -144,26 +169,85 @@ final class CanvasViewModel {
     func updateDrawing(_ drawing: PKDrawing, gestureID: UUID? = nil, saveImmediately: Bool = true) {
         guard drawing != document.drawing else { return }
         if gestureID == nil || gestureID != lastDrawingGestureID {
-            undoDrawings.append(document.drawing)
-            if undoDrawings.count > 100 { undoDrawings.removeFirst() }
-            redoDrawings.removeAll()
+            recordEdit()
         }
         lastDrawingGestureID = gestureID
         replaceDrawing(drawing, saveImmediately: saveImmediately)
     }
 
-    func undo() {
-        guard let previous = undoDrawings.popLast() else { return }
-        redoDrawings.append(document.drawing)
+    private var editState: EditState {
+        EditState(drawing: document.drawing, referenceImage: document.referenceImage, exportBounds: document.selectedExportBounds)
+    }
+
+    private func recordEdit() {
+        undoEdits.append(editState)
+        if undoEdits.count > 100 { undoEdits.removeFirst() }
+        redoEdits.removeAll()
         lastDrawingGestureID = nil
-        replaceDrawing(previous)
+        clearSelection()
+    }
+
+    func clearSelection() {
+        selectedStrokeIndexes = []
+        isReferenceSelected = false
+    }
+
+    func selectContent(in bounds: CGRect) {
+        guard CanvasDocument.isValid(bounds) else { clearSelection(); return }
+        selectedStrokeIndexes = Set(drawing.strokes.indices.filter { drawing.strokes[$0].renderBounds.intersects(bounds) })
+        isReferenceSelected = referenceImage.map { $0.bounds.intersects(bounds) } ?? false
+    }
+
+    func selectContent(at point: CGPoint, tolerance: CGFloat) {
+        clearSelection()
+        // Ink is above the image. A tap selects the topmost matching object.
+        if let index = drawing.strokes.indices.reversed().first(where: {
+            drawing.strokes[$0].renderBounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
+        }) {
+            selectedStrokeIndexes = [index]
+        } else if referenceImage?.bounds.contains(point) == true {
+            isReferenceSelected = true
+        }
+    }
+
+    func selectAllContent() {
+        selectedStrokeIndexes = Set(drawing.strokes.indices)
+        isReferenceSelected = referenceImage != nil
+    }
+
+    func deleteSelectedContent() {
+        guard hasSelection else { return }
+        let indexes = selectedStrokeIndexes
+        let removeReference = isReferenceSelected
+        recordEdit()
+        document.drawing = PKDrawing(strokes: document.drawing.strokes.enumerated().compactMap {
+            indexes.contains($0.offset) ? nil : $0.element
+        })
+        if removeReference { document.referenceImage = nil }
+        refreshExportBounds()
+        documentChanged()
+    }
+
+    func undo() {
+        guard let previous = undoEdits.popLast() else { return }
+        redoEdits.append(editState)
+        restoreEdit(previous)
     }
 
     func redo() {
-        guard let next = redoDrawings.popLast() else { return }
-        undoDrawings.append(document.drawing)
+        guard let next = redoEdits.popLast() else { return }
+        undoEdits.append(editState)
+        restoreEdit(next)
+    }
+
+    private func restoreEdit(_ state: EditState) {
         lastDrawingGestureID = nil
-        replaceDrawing(next)
+        clearSelection()
+        document.drawing = state.drawing
+        document.referenceImage = state.referenceImage
+        document.selectedExportBounds = state.exportBounds
+        refreshExportBounds()
+        documentChanged()
     }
 
     private func replaceDrawing(_ drawing: PKDrawing, saveImmediately: Bool = true) {

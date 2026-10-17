@@ -35,6 +35,7 @@ final class CodexProjectCreationModel {
     @ObservationIgnored private var activeStatusObserver: UUID?
     @ObservationIgnored private var localValidationRejection = false
     @ObservationIgnored private var hasOpenedChat = false
+    @ObservationIgnored private var validationSettings: CodexModelSettingsModel?
 
     init(project: CodexProject, host: CodexHost, serverURL: URL,
          network: any CodexProjectNetworking = NetworkService(), storageRoot: URL? = nil, draftID: String? = nil) {
@@ -176,6 +177,7 @@ final class CodexProjectCreationModel {
     }
 
     func validateDestination(using settings: CodexModelSettingsModel) {
+        validationSettings = settings
         guard request == nil else { return }
         if !attachments.isEmpty && !project.supportsFirstMessageAttachments {
             destinationNeedsValidation = true
@@ -202,15 +204,42 @@ final class CodexProjectCreationModel {
         guard attachments.count < CodexAttachmentImporter.maximumCount else { throw CodexAttachmentImporter.ImportError.tooMany }
         guard attachments.reduce(image.data.count, { $0 + ($1.imageData?.count ?? 0) }) <= CodexAttachmentImporter.maximumTotalBytes else { throw CodexAttachmentImporter.ImportError.totalTooLarge }
         let previous = attachments
+        let previousValidation = destinationNeedsValidation
+        let previousError = error
         attachments.append(CodexCreateChatAttachment(id: UUID().uuidString.lowercased(), name: image.name, mimeType: image.mimeType, dataBase64: image.data.base64EncodedString()))
-        guard save() else { attachments = previous; throw CreationAttachmentError.saveFailed }
+        revalidateDestinationAfterAttachmentChange()
+        guard save() else {
+            attachments = previous
+            destinationNeedsValidation = previousValidation
+            error = previousError
+            throw CreationAttachmentError.saveFailed
+        }
     }
 
     func removeAttachment(_ id: String) {
         guard request == nil, !restorationFailed else { return }
         let previous = attachments
+        let previousValidation = destinationNeedsValidation
+        let previousError = error
         attachments.removeAll { $0.id == id }
-        if !save() { attachments = previous }
+        revalidateDestinationAfterAttachmentChange()
+        if !save() {
+            attachments = previous
+            destinationNeedsValidation = previousValidation
+            error = previousError
+        }
+    }
+
+    private func revalidateDestinationAfterAttachmentChange() {
+        guard request == nil else { return }
+        if let validationSettings {
+            validateDestination(using: validationSettings)
+        } else if attachments.isEmpty {
+            // No catalogue is needed to accept a text-only draft. Keep an
+            // explicit model selection blocked until it can be checked.
+            destinationNeedsValidation = modelSelection != nil
+            error = nil
+        }
     }
 
     enum CreationAttachmentError: LocalizedError {

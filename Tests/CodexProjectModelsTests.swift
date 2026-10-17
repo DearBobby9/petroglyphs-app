@@ -950,11 +950,81 @@ final class CodexProjectModelsTests: XCTestCase {
     }
 
     @MainActor
+    func testRemovingLastUnsupportedImageRevalidatesDestinationImmediately() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ProjectNetworkFixture()
+        let seed = creation(network, root: root)
+        var supported = seed.project
+        supported.supportsFirstMessageAttachments = true
+        let settings = CodexModelSettingsModel(network: CreationModelSettingsFixture(), now: { Date(timeIntervalSince1970: 1) })
+        await settings.load(from: server, hostId: seed.host.id, threadId: nil)
+        let model = CodexProjectCreationModel(project: supported, host: seed.host, serverURL: server,
+            network: network, storageRoot: root, draftID: UUID().uuidString.lowercased())
+        model.prompt = "A valid text message"
+        try model.addImage(CodexImportedImage(data: Data([1, 2, 3]), name: "Probe.png", mimeType: "image/png"))
+        model.validateDestination(using: settings)
+        XCTAssertTrue(model.canSubmit)
+
+        XCTAssertTrue(model.changeDestination(project: seed.project, host: seed.host, serverURL: server))
+        model.validateDestination(using: settings)
+        XCTAssertTrue(model.destinationNeedsValidation)
+        model.removeAttachment(try XCTUnwrap(model.attachments.first).id)
+
+        XCTAssertTrue(model.attachments.isEmpty)
+        XCTAssertFalse(model.destinationNeedsValidation)
+        XCTAssertTrue(model.canSubmit, "Removing the last unsupported image must immediately unblock valid text input.")
+    }
+
+    @MainActor
+    func testRemovingLastUnsupportedImageKeepsAnInvalidModelBlocked() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ProjectNetworkFixture()
+        let seed = creation(network, root: root)
+        var supported = seed.project
+        supported.supportsFirstMessageAttachments = true
+        let settings = CodexModelSettingsModel(network: CreationModelSettingsFixture(), now: { Date(timeIntervalSince1970: 1) })
+        await settings.load(from: server, hostId: seed.host.id, threadId: nil)
+        let model = CodexProjectCreationModel(project: supported, host: seed.host, serverURL: server,
+            network: network, storageRoot: root, draftID: UUID().uuidString.lowercased())
+        model.prompt = "A valid text message"
+        model.modelSelection = CodexDraftModelSelection(model: "missing-model", reasoningEffort: "high")
+        try model.addImage(CodexImportedImage(data: Data([1, 2, 3]), name: "Probe.png", mimeType: "image/png"))
+        model.validateDestination(using: settings)
+        XCTAssertTrue(model.destinationNeedsValidation)
+
+        XCTAssertTrue(model.changeDestination(project: seed.project, host: seed.host, serverURL: server))
+        model.validateDestination(using: settings)
+        model.removeAttachment(try XCTUnwrap(model.attachments.first).id)
+
+        XCTAssertTrue(model.attachments.isEmpty)
+        XCTAssertTrue(model.destinationNeedsValidation)
+        XCTAssertFalse(model.canSubmit, "Attachment revalidation must not clear an incompatible selected model.")
+    }
+
+    @MainActor
     private func creation(_ network: ProjectNetworkFixture, root: URL, host: String = "local", projectID: String = "project-local", base: URL? = nil) -> CodexProjectCreationModel {
         CodexProjectCreationModel(
             project: CodexProject(id: projectID, name: "Project", path: "/project", canCreate: true, reason: nil),
             host: CodexHost(id: host, name: host, kind: host == "local" ? "local" : "remote", configured: true, available: true, reason: nil),
             serverURL: base ?? server, network: network, storageRoot: root)
+    }
+}
+
+private struct CreationModelSettingsFixture: CodexModelSettingsNetworking {
+    func codexModels(from serverURL: URL, hostId: String) async throws -> CodexModelCatalog {
+        CodexModelCatalog(hostId: hostId, status: "available", source: nil,
+                          observedAt: "1970-01-01T00:00:00Z", expiresAt: "1970-01-01T00:05:00Z",
+                          models: [CodexAvailableModel(id: "valid-model", model: "valid-model", displayName: "Valid model",
+                                                       description: "", supportedReasoningEfforts: [CodexReasoningOption(reasoningEffort: "high", description: "")],
+                                                       defaultReasoningEffort: "high", inputModalities: ["text", "image"], isDefault: true)],
+                          reason: nil)
+    }
+
+    func codexModelSettings(from serverURL: URL, hostId: String, threadId: String) async throws -> CodexThreadModelSettings {
+        CodexThreadModelSettings(hostId: hostId, threadId: threadId, model: "valid-model", reasoningEffort: "high",
+                                  observedAt: "1970-01-01T00:00:00Z")
     }
 }
 

@@ -219,7 +219,6 @@ struct CodexNewChatPanel: View {
                         let image = try await Task.detached { try CodexAttachmentImporter.normalize(data, name: "Photo") }.value
                         try model.addImage(image)
                     }
-                    model.validateDestination(using: modelSettings)
                 } catch { attachmentNotice = error.localizedDescription }
             }
         }
@@ -235,12 +234,14 @@ struct CodexNewChatPanel: View {
                         let image = try await Task.detached { try CodexAttachmentImporter.normalize(data, name: url.lastPathComponent) }.value
                         try model.addImage(image)
                     }
-                    model.validateDestination(using: modelSettings)
                 } catch { attachmentNotice = error.localizedDescription }
             }
         }
         .onChange(of: modelSettings.isLoading, initial: true) { _, loading in
             if !loading { model.validateDestination(using: modelSettings) }
+        }
+        .onChange(of: model.attachments) { _, _ in
+            model.validateDestination(using: modelSettings)
         }
         .onChange(of: model.modelSelection) { _, _ in model.validateDestination(using: modelSettings) }
         .task(id: "\(model.serverURL.absoluteString):\(model.host.id):\(model.project.id)") {
@@ -266,7 +267,6 @@ struct CodexNewChatPanel: View {
                 guard let data = onAddCanvas() else { attachmentNotice = "Add content to the canvas first."; return }
                 do {
                     try model.addImage(CodexImportedImage(data: data, name: onCanvasFilename(), mimeType: "image/png"))
-                    model.validateDestination(using: modelSettings)
                 } catch { attachmentNotice = error.localizedDescription }
             }
             PasteButton(supportedContentTypes: [.image], payloadAction: importProviders)
@@ -285,7 +285,6 @@ struct CodexNewChatPanel: View {
             defer { isImporting = false }
             do {
                 for provider in providers { try model.addImage(await CodexAttachmentImporter.image(from: provider)) }
-                model.validateDestination(using: modelSettings)
             } catch { attachmentNotice = error.localizedDescription }
         }
     }

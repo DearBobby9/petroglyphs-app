@@ -395,6 +395,85 @@ final class CanvasDocumentTests: XCTestCase {
         XCTAssertEqual(CanvasViewModel(storageURL: parent.appending(path: "active.json")).drawing.strokes.count, 1)
     }
 
+    @MainActor
+    func testSelectingAndDeletingReferencePreservesInkAndCanUndoAfterReload() throws {
+        let storage = temporaryStorage()
+        let model = CanvasViewModel(storageURL: storage)
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 100)).pngData { context in
+            UIColor.green.setFill(); context.fill(CGRect(x: 0, y: 0, width: 200, height: 100))
+        }
+        try model.setReferenceImage(data: image, name: "Saved reference.png", sourceID: "test")
+        model.drawing = makeDrawing()
+        let restored = CanvasViewModel(storageURL: storage)
+        restored.isSelectingContent = true
+        restored.selectContent(at: CGPoint(x: 180, y: 80), tolerance: 4)
+        XCTAssertTrue(restored.isReferenceSelected)
+        XCTAssertTrue(restored.selectedStrokeIndexes.isEmpty)
+        restored.deleteSelectedContent()
+        XCTAssertNil(restored.referenceImage)
+        XCTAssertEqual(restored.drawing.strokes.count, 1)
+        XCTAssertNil(CanvasViewModel(storageURL: storage).referenceImage)
+        restored.undo()
+        XCTAssertEqual(restored.referenceImage?.data, model.referenceImage?.data)
+        XCTAssertEqual(restored.drawing.strokes.count, 1)
+        restored.redo()
+        XCTAssertNil(restored.referenceImage)
+        XCTAssertFalse(restored.hasSelection)
+    }
+
+    @MainActor
+    func testBoxSelectionDeletesOnlyIntersectingStrokesAndSelectAllDeletesBothLayers() throws {
+        let model = CanvasViewModel(storageURL: temporaryStorage())
+        let first = makeDrawing()
+        let other = makeDrawing(ink: .blue).transformed(using: CGAffineTransform(translationX: 300, y: 300))
+        model.drawing = PKDrawing(strokes: first.strokes + other.strokes)
+        model.selectContent(in: first.bounds.insetBy(dx: -10, dy: -10))
+        XCTAssertEqual(model.selectedStrokeIndexes, [0])
+        model.deleteSelectedContent()
+        XCTAssertEqual(model.drawing.strokes.count, 1)
+        XCTAssertEqual(model.drawing.strokes.first?.ink.color, .blue)
+        model.undo()
+        XCTAssertEqual(model.drawing.strokes.count, 2)
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 100)).pngData { _ in }
+        try model.setReferenceImage(data: image, name: "Image.png", sourceID: "test")
+        model.selectAllContent()
+        model.deleteSelectedContent()
+        XCTAssertFalse(model.hasContent)
+        model.undo()
+        XCTAssertEqual(model.drawing.strokes.count, 2)
+        XCTAssertNotNil(model.referenceImage)
+    }
+
+    @MainActor
+    func testResizeDuringToolGesturePreservesLiveInkAndOneUndoBoundary() {
+        let model = CanvasViewModel(storageURL: temporaryStorage())
+        let surface = CanvasDocumentSurface(frame: CGRect(x: 0, y: 0, width: 480, height: 400))
+        surface.apply(model, selecting: false, onSelection: nil)
+        surface.layoutIfNeeded()
+        let coordinator = CanvasView.Coordinator(viewModel: model)
+        coordinator.surface = surface
+        coordinator.canvasViewDidBeginUsingTool(surface.canvas)
+        let offset = CGAffineTransform(translationX: surface.canvas.contentOffset.x, y: surface.canvas.contentOffset.y)
+        surface.canvas.drawing = makeDrawing().transformed(using: offset)
+        let expected = surface.documentDrawing(from: surface.canvas.drawing).bounds
+        coordinator.canvasViewDrawingDidChange(surface.canvas)
+        XCTAssertTrue(model.drawing.strokes.isEmpty)
+        surface.frame.size = CGSize(width: 600, height: 400)
+        surface.layoutIfNeeded()
+        XCTAssertEqual(surface.canvas.drawing.strokes.count, 1)
+        coordinator.canvasViewDidEndUsingTool(surface.canvas)
+        surface.layoutIfNeeded()
+        XCTAssertEqual(model.drawing.strokes.count, 1)
+        XCTAssertEqual(model.drawing.bounds.minX, expected.minX, accuracy: 0.001)
+        XCTAssertEqual(model.drawing.bounds.minY, expected.minY, accuracy: 0.001)
+        XCTAssertEqual(surface.documentDrawing(from: surface.canvas.drawing).bounds.minX, expected.minX, accuracy: 0.001)
+        model.undo()
+        XCTAssertTrue(model.drawing.strokes.isEmpty)
+        XCTAssertFalse(model.canUndo)
+        model.redo()
+        XCTAssertEqual(model.drawing.strokes.count, 1)
+    }
+
     private func temporaryStorage() -> URL {
         let directory = FileManager.default.temporaryDirectory.appending(path: "CanvasDocumentTests-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

@@ -32,7 +32,7 @@ struct CanvasView: UIViewRepresentable {
         // Tool picker
         let toolPicker = PKToolPicker()
         CanvasAppearance.apply(colorScheme, to: canvas, toolPicker: toolPicker)
-        context.coordinator.isDrawingActive = isDrawingActive && !isSelectingExportBounds
+        context.coordinator.isDrawingActive = isDrawingActive && !isSelectingExportBounds && !viewModel.isSelectingContent
         toolPicker.setVisible(context.coordinator.isDrawingActive, forFirstResponder: canvas)
         toolPicker.addObserver(canvas)
         context.coordinator.toolPicker = toolPicker
@@ -51,11 +51,15 @@ struct CanvasView: UIViewRepresentable {
         context.coordinator.viewModel = viewModel
         surface.apply(viewModel, selecting: isSelectingExportBounds, onSelection: onExportBoundsSelected)
         CanvasAppearance.apply(colorScheme, to: canvas, toolPicker: context.coordinator.toolPicker)
-        let drawingActive = isDrawingActive && !isSelectingExportBounds
+        let drawingActive = isDrawingActive && !isSelectingExportBounds && !viewModel.isSelectingContent
         if context.coordinator.isDrawingActive != drawingActive {
             context.coordinator.isDrawingActive = drawingActive
             context.coordinator.toolPicker?.setVisible(drawingActive, forFirstResponder: canvas)
-            if drawingActive { canvas.becomeFirstResponder() }
+            if drawingActive || (isDrawingActive && viewModel.isSelectingContent && !isSelectingExportBounds) {
+                // Keep document keyboard commands available while the drawing
+                // palette is hidden for object selection.
+                canvas.becomeFirstResponder()
+            }
             else if canvas.isFirstResponder { canvas.resignFirstResponder() }
         }
     }
@@ -141,6 +145,9 @@ final class CanvasDocumentSurface: UIView {
     let canvas = CanvasDrawingView()
     private let referenceView = UIImageView()
     private let selectionLayer = CAShapeLayer()
+    private let contentSelectionLayer = CAShapeLayer()
+    private var selectingExport = false
+    private lazy var contentTapGesture = UITapGestureRecognizer(target: self, action: #selector(selectObject))
     private lazy var selectionGesture = UIPanGestureRecognizer(target: self, action: #selector(selectExportArea))
     private weak var viewModel: CanvasViewModel?
     private var referenceID: UUID?
@@ -182,6 +189,12 @@ final class CanvasDocumentSurface: UIView {
         selectionLayer.lineWidth = 2
         selectionLayer.lineDashPattern = [6, 4]
         layer.addSublayer(selectionLayer)
+        contentSelectionLayer.fillColor = UIColor.systemBlue.withAlphaComponent(0.08).cgColor
+        contentSelectionLayer.strokeColor = UIColor.systemBlue.cgColor
+        contentSelectionLayer.lineWidth = 2
+        layer.addSublayer(contentSelectionLayer)
+        contentTapGesture.isEnabled = false
+        addGestureRecognizer(contentTapGesture)
         selectionGesture.maximumNumberOfTouches = 1
         selectionGesture.isEnabled = false
         addGestureRecognizer(selectionGesture)
@@ -202,10 +215,13 @@ final class CanvasDocumentSurface: UIView {
         }
         referenceBounds = model.referenceImage?.bounds
         referenceView.isHidden = referenceBounds == nil
-        selectionGesture.isEnabled = selecting
-        canvas.drawingGestureRecognizer.isEnabled = !selecting
-        canvas.isScrollEnabled = !selecting
-        if !selecting {
+        selectingExport = selecting
+        let selectingContent = model.isSelectingContent && !selecting
+        selectionGesture.isEnabled = selecting || selectingContent
+        contentTapGesture.isEnabled = selectingContent
+        canvas.drawingGestureRecognizer.isEnabled = !selecting && !selectingContent
+        canvas.isScrollEnabled = !selecting && !selectingContent
+        if !selecting && !selectingContent {
             selectionStart = nil
             selectionPreview = nil
         }
@@ -228,13 +244,15 @@ final class CanvasDocumentSurface: UIView {
             let initial = viewModel?.viewport
                 ?? CanvasViewport(center: CGPoint(x: contentBounds.midX, y: contentBounds.midY), zoom: 1)
             positionViewport(initial, rebuildWindow: true)
-        } else if viewportSize != bounds.size {
+        } else if viewportSize != bounds.size, !isUsingTool {
             InteractionDiagnostics.shared.record(.canvasPositionResize)
             // Preserve the document point at the center while rotating or
             // resizing the chat pane. Do not transform ink on every layout.
             positionViewport(previous, rebuildWindow: scrollWindow?.canContain(bounds.size) != true)
         }
-        viewportSize = bounds.size
+        // Keep the old camera basis until tool-up has committed live ink.
+        // Rebuilding now would replace it with the previous document drawing.
+        if !isUsingTool { viewportSize = bounds.size }
         applyViewportCommand()
         layoutDocumentLayers()
     }
@@ -302,7 +320,12 @@ final class CanvasDocumentSurface: UIView {
         }
         selectionLayer.frame = bounds
         let selection = selectionPreview ?? selectedBounds
-        selectionLayer.path = selection.map {
+        contentSelectionLayer.frame = bounds
+        let contentSelection = !selectingExport ? (selectionPreview ?? viewModel?.contentSelectionBounds) : nil
+        contentSelectionLayer.path = contentSelection.map {
+            UIBezierPath(rect: scrollWindow.surfaceRect(for: $0, contentOffset: offset, zoom: zoom)).cgPath
+        }
+        selectionLayer.path = (selectingExport ? selection : selectedBounds).map {
             UIBezierPath(rect: scrollWindow.surfaceRect(for: $0, contentOffset: offset, zoom: zoom)).cgPath
         }
         CATransaction.commit()
@@ -361,6 +384,11 @@ final class CanvasDocumentSurface: UIView {
         saveViewport()
     }
 
+    @objc private func selectObject(_ gesture: UITapGestureRecognizer) {
+        viewModel?.selectContent(at: documentPoint(at: gesture.location(in: self)), tolerance: 12 / canvas.zoomScale)
+        layoutDocumentLayers()
+    }
+
     @objc private func selectExportArea(_ gesture: UIPanGestureRecognizer) {
         let location = gesture.location(in: self)
         let point = documentPoint(at: location)
@@ -375,10 +403,15 @@ final class CanvasDocumentSurface: UIView {
                                    width: abs(point.x - start.x), height: abs(point.y - start.y))
             selectionPreview = rectangle
             if gesture.state == .ended {
-                if rectangle.width >= 8, rectangle.height >= 8,
-                   (try? viewModel?.setExportBounds(rectangle)) != nil {
-                    selectedBounds = rectangle
-                    onSelection?()
+                if rectangle.width >= 8, rectangle.height >= 8 {
+                    if selectingExport {
+                        if (try? viewModel?.setExportBounds(rectangle)) != nil {
+                            selectedBounds = rectangle
+                            onSelection?()
+                        }
+                    } else {
+                        viewModel?.selectContent(in: rectangle)
+                    }
                 }
                 selectionStart = nil
                 selectionPreview = nil
@@ -403,16 +436,19 @@ final class CanvasDrawingView: PKCanvasView {
     override var keyCommands: [UIKeyCommand]? {
         [
             UIKeyCommand(input: "z", modifierFlags: .command, action: #selector(undoDocument)),
-            UIKeyCommand(input: "z", modifierFlags: [.command, .shift], action: #selector(redoDocument))
+            UIKeyCommand(input: "z", modifierFlags: [.command, .shift], action: #selector(redoDocument)),
+            UIKeyCommand(input: UIKeyCommand.inputDelete, modifierFlags: [], action: #selector(deleteSelection))
         ]
     }
 
     override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
         if action == #selector(undoDocument) { return viewModel?.canUndo == true }
         if action == #selector(redoDocument) { return viewModel?.canRedo == true }
+        if action == #selector(deleteSelection) { return viewModel?.hasSelection == true }
         return super.canPerformAction(action, withSender: sender)
     }
 
+    @objc private func deleteSelection() { viewModel?.deleteSelectedContent() }
     @objc private func undoDocument() { viewModel?.undo() }
     @objc private func redoDocument() { viewModel?.redo() }
 }

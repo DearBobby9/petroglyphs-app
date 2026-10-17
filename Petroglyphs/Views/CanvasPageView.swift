@@ -469,12 +469,12 @@ struct CanvasPageView: View {
                             Button("Import result image", systemImage: "folder") { showReferenceFiles = true }
                             Button("Choose photo", systemImage: "photo") { showReferencePhotos = true }
                             if let reference = vm.referenceImage {
-                                Text("Locked reference: \(reference.name)")
+                                Text("Reference: \(reference.name)")
                                 Button("Remove reference image", systemImage: "photo.badge.minus", role: .destructive) { vm.clearReferenceImage() }
                             }
                         }
                         Section("Export area") {
-                            Button("Select area", systemImage: "viewfinder") { isSelectingExportBounds = true }
+                            Button("Select export area", systemImage: "viewfinder") { vm.isSelectingContent = false; isSelectingExportBounds = true }
                                 .disabled(!vm.hasContent)
                             Button("Full canvas", systemImage: "arrow.up.left.and.arrow.down.right") {
                                 do { try vm.setExportBounds(nil) } catch { vm.castError = error.localizedDescription }
@@ -505,7 +505,43 @@ struct CanvasPageView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
+                HStack(spacing: 8) {
+                    Button {
+                        isSelectingExportBounds = false
+                        vm.isSelectingContent.toggle()
+                    } label: {
+                        Label(vm.isSelectingContent ? "Done" : "Select", systemImage: "cursorarrow")
+                            .font(.callout.weight(.medium)).padding(.horizontal, 12).frame(minHeight: 44)
+                            .background(vm.isSelectingContent ? Color.ochre : Color.sandstone.opacity(0.9), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("canvas.select")
+                    .accessibilityHint("Tap an image or stroke, or drag a box. Select all includes reference images and ink.")
+
+                    Button(role: .destructive) { vm.deleteSelectedContent() } label: {
+                        Label("Delete", systemImage: "trash")
+                            .font(.callout.weight(.medium)).padding(.horizontal, 12).frame(minHeight: 44)
+                            .background(Color.sandstone.opacity(0.9), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(!vm.hasSelection)
+                    .accessibilityLabel("Delete selected objects")
+                    .accessibilityIdentifier("canvas.deleteSelection")
+
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 16)
                 Spacer()
+                if vm.isSelectingContent && !isSelectingExportBounds {
+                    HStack {
+                        Text(vm.selectionDescription).font(.caption)
+                        Button("Select all") { vm.selectAllContent() }.frame(minHeight: 44)
+                            .accessibilityIdentifier("canvas.selectAll")
+                        Button("Undo") { vm.undo() }.disabled(!vm.canUndo).frame(minHeight: 44)
+                    }
+                    .padding(8).background(Color.panelBackground, in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal, 16)
+                }
                 if isSelectingExportBounds {
                     HStack {
                         Text("Drag over the canvas to select the snapshot area.").font(.caption)

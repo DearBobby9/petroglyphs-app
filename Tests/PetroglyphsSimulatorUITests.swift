@@ -70,6 +70,49 @@ final class PetroglyphsSimulatorUITests: XCTestCase {
         capture("Redo restores post-clear ink")
     }
 
+    func testSelectAllDeleteAndVisibleUndoRestoresInk() {
+        launch()
+        openSavedWorkspace()
+        clearInkIfNeeded()
+        drawStroke(from: CGVector(dx: 0.28, dy: 0.36), to: CGVector(dx: 0.62, dy: 0.5))
+        assertInkPresent(true)
+
+        tap(app.buttons["canvas.select"])
+        tap(app.buttons["canvas.selectAll"])
+
+        let delete = app.buttons["canvas.deleteSelection"]
+        wait("Select all must enable the visible delete control") {
+            delete.exists && delete.isHittable && delete.isEnabled
+        }
+        tap(delete)
+        wait("Deleting the selected ink must disable the visible delete control") {
+            delete.exists && !delete.isEnabled
+        }
+        assertInkPresent(false)
+
+        let undo = app.buttons["Undo"]
+        wait("Deleting selected ink must expose an enabled visible Undo control") {
+            undo.exists && undo.isHittable && undo.isEnabled
+        }
+        tap(undo)
+        assertInkPresent(true)
+
+        // Selection mode remains active after Undo. Exercise the visible
+        // rectangle-selection gesture before deleting and undoing it again.
+        drawStroke(from: CGVector(dx: 0.2, dy: 0.3), to: CGVector(dx: 0.7, dy: 0.6))
+        wait("Dragging a selection rectangle must enable the visible delete control") {
+            delete.exists && delete.isHittable && delete.isEnabled
+        }
+        tap(delete)
+        assertInkPresent(false)
+        wait("Deleting the rectangle selection must expose an enabled visible Undo control") {
+            undo.exists && undo.isHittable && undo.isEnabled
+        }
+        tap(undo)
+        assertInkPresent(true)
+        capture("Select all delete and visible Undo restore ink")
+    }
+
     func testConnectionEditsAndModeAreDiscardedOnCancel() {
         launch()
         openSavedWorkspace()
