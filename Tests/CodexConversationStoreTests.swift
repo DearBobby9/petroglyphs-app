@@ -740,6 +740,162 @@ final class CodexConversationStoreTests: XCTestCase {
         XCTAssertTrue(latest.session(for: destination).isAtBottom)
     }
 
+    @MainActor
+    func testSubmissionReferenceIsAvailableBeforeResponseAndRemainsBoundToOriginalTarget() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ConversationNetworkFixture()
+        await network.configure(post: .suspended, receipt: .missing)
+        let original = target()
+        let other = target(host: "remote-control:mini")
+        let store = CodexConversationStore(network: network, storageRoot: root)
+        store.setDraftText("Keep original destination", for: original)
+        let send = Task { await store.sendDraft(to: original) }
+        await network.waitForRequest()
+        let reference = try XCTUnwrap(store.lastSubmission)
+        XCTAssertEqual(reference.target, original)
+        XCTAssertEqual(store.localMessage(reference.id, for: reference.target)?.state, .dispatching)
+        store.setDraftText("Independent work", for: other)
+        let reopened = CodexConversationStore(network: network, storageRoot: root)
+        XCTAssertEqual(reopened.lastSubmission, reference)
+        await network.finishSuspendedPost()
+        let returned = await send.value
+        XCTAssertEqual(returned, reference)
+        XCTAssertEqual(store.lastSubmission?.target, original)
+        XCTAssertEqual(store.session(for: other).draft.text, "Independent work")
+    }
+
+    @MainActor
+    func testObserversSharePollingAndCancellingOneKeepsTheOtherAlive() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ConversationNetworkFixture()
+        let clock = ConversationPollingClock()
+        let destination = target()
+        let key = CodexConversationKey(destination)
+        let store = CodexConversationStore(network: network, storageRoot: root, pollingSleep: clock.sleep)
+        let first = Task { await store.observe(target: destination) }
+        defer { first.cancel() }
+        await waitUntil { clock.pendingCount == 1 }
+        var secondStarted = false
+        let second = Task {
+            secondStarted = true
+            await store.observe(target: destination)
+        }
+        await waitUntil { secondStarted }
+        second.cancel()
+        await second.value
+        let readsAfterSecondObserver = await network.historyReadCount(for: key)
+        XCTAssertEqual(readsAfterSecondObserver, 1, "Joining the same chat must reuse its poller rather than refresh again.")
+        XCTAssertEqual(clock.pendingCount, 1)
+
+        clock.advance()
+        await waitUntil { await network.historyReadCount(for: key) == 2 && clock.pendingCount == 1 }
+        first.cancel()
+        await first.value
+        await waitUntil { clock.pendingCount == 0 }
+        let readsAfterCancellation = await network.historyReadCount(for: key)
+        XCTAssertEqual(readsAfterCancellation, 2)
+
+        // A new observer starts one fresh poller after the old subscribers leave.
+        let reopened = Task { await store.observe(target: destination) }
+        defer { reopened.cancel() }
+        await waitUntil { await network.historyReadCount(for: key) == 3 && clock.pendingCount == 1 }
+        reopened.cancel()
+        await reopened.value
+        await waitUntil { clock.pendingCount == 0 }
+        let cancelled = Task { await store.observe(target: destination) }
+        cancelled.cancel()
+        await cancelled.value
+        let finalReads = await network.historyReadCount(for: key)
+        XCTAssertEqual(finalReads, 3, "An already-cancelled view task must not start another poller.")
+    }
+
+    @MainActor
+    func testOriginalRequestSubscriberKeepsReconcilingAfterSelectedChatChanges() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ConversationNetworkFixture()
+        await network.configure(post: .timeout, receipt: .unavailable)
+        let clock = ConversationPollingClock()
+        let original = target()
+        let other = target(host: "remote-control:mini")
+        let store = CodexConversationStore(network: network, storageRoot: root, pollingSleep: clock.sleep)
+        store.setDraftText("Keep original target and request", for: original)
+        await store.sendDraft(to: original)
+        let reference = try XCTUnwrap(store.lastSubmission)
+        XCTAssertEqual(store.localMessage(reference.id, for: original)?.state, .unknown)
+        let selectedOriginal = Task { await store.observe(target: original) }
+        let requestCard = Task { await store.observe(target: reference.target) }
+        defer { selectedOriginal.cancel(); requestCard.cancel() }
+        await waitUntil { clock.pendingCount == 1 }
+        selectedOriginal.cancel()
+        await selectedOriginal.value
+        store.setDraftText("Independent second chat", for: other)
+        let selectedOther = Task { await store.observe(target: other) }
+        defer { selectedOther.cancel() }
+        await waitUntil { clock.pendingCount == 2 }
+
+        await network.configure(post: .accepted, receipt: .accepted)
+        await network.setReceiptState(.completed)
+        clock.advance()
+        await waitUntil { store.localMessage(reference.id, for: original)?.state == .completed && clock.pendingCount == 2 }
+        XCTAssertEqual(store.lastSubmission, reference)
+        XCTAssertEqual(store.session(for: other).draft.text, "Independent second chat")
+        XCTAssertTrue(store.session(for: other).outgoing.isEmpty)
+        let requests = await network.requests
+        let receiptKeys = await network.receiptReadKeys
+        XCTAssertEqual(requests.count, 1, "Reconciliation must never replay an unknown send.")
+        XCTAssertTrue(receiptKeys.allSatisfy { $0 == CodexConversationKey(original) })
+
+        requestCard.cancel()
+        selectedOther.cancel()
+        await requestCard.value
+        await selectedOther.value
+        await waitUntil { clock.pendingCount == 0 }
+    }
+
+    @MainActor
+    func testRestoredSubmissionObserverUsesSavedOriginalTargetWithoutPosting() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ConversationNetworkFixture()
+        let original = target()
+        let other = target(host: "remote-control:mini")
+        let store = CodexConversationStore(network: network, storageRoot: root)
+        store.setDraftText("Persist original request", for: original)
+        await store.sendDraft(to: original)
+        let reference = try XCTUnwrap(store.lastSubmission)
+        let clock = ConversationPollingClock()
+        let restored = CodexConversationStore(network: network, storageRoot: root, pollingSleep: clock.sleep)
+        let restoredReference = try XCTUnwrap(restored.lastSubmission)
+        XCTAssertEqual(restoredReference, reference)
+        await network.setReceiptState(.completed)
+        let requestCard = Task { await restored.observe(target: restoredReference.target) }
+        let selectedOther = Task { await restored.observe(target: other) }
+        defer { requestCard.cancel(); selectedOther.cancel() }
+        await waitUntil { restored.localMessage(reference.id, for: original)?.state == .completed && clock.pendingCount == 2 }
+        let requests = await network.requests
+        let receiptKeys = await network.receiptReadKeys
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertTrue(receiptKeys.allSatisfy { $0 == CodexConversationKey(original) })
+        XCTAssertTrue(restored.session(for: other).outgoing.isEmpty)
+        requestCard.cancel()
+        selectedOther.cancel()
+        await requestCard.value
+        await selectedOther.value
+        await waitUntil { clock.pendingCount == 0 }
+    }
+
+    @MainActor
+    private func waitUntil(_ condition: @MainActor () async -> Bool, file: StaticString = #filePath, line: UInt = #line) async {
+        for _ in 0..<200 {
+            if await condition() { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        XCTFail("Timed out waiting for the polling fixture", file: file, line: line)
+    }
+
     private func numberedMessages(_ numbers: ClosedRange<Int>) -> [CodexConversationMessage] {
         numbers.map { index in
             CodexConversationMessage(id: "message-\(index)", turnId: nil, clientMessageId: nil, role: "assistant", text: "Message \(index)", phase: "final_answer", createdAt: Date(timeIntervalSince1970: Double(index)), state: .completed, attachments: [])
@@ -772,12 +928,39 @@ final class CodexConversationStoreTests: XCTestCase {
     }
 }
 
+@MainActor
+private final class ConversationPollingClock {
+    private var sleepers: [UUID: CheckedContinuation<Void, Error>] = [:]
+    var pendingCount: Int { sleepers.count }
+
+    func sleep(_ interval: TimeInterval) async throws {
+        let id = UUID()
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                guard !Task.isCancelled else { continuation.resume(throwing: CancellationError()); return }
+                sleepers[id] = continuation
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in
+                self?.sleepers.removeValue(forKey: id)?.resume(throwing: CancellationError())
+            }
+        }
+    }
+
+    func advance() {
+        let pending = Array(sleepers.values)
+        sleepers.removeAll()
+        for sleeper in pending { sleeper.resume() }
+    }
+}
+
 private actor ConversationNetworkFixture: CodexConversationNetworking, CodexModelSettingsNetworking {
     static let modelObservedAt = Date(timeIntervalSince1970: 1_800_000_000)
     enum PostMode { case accepted, timeout, suspended }
     enum ReceiptMode { case accepted, missing, unavailable }
     var requests: [CodexMessageRequest] = []
     var receiptReadCount = 0
+    var receiptReadKeys: [CodexConversationKey] = []
     var releaseCount = 0
     var cancelCount = 0
     private var postMode = PostMode.accepted
@@ -798,7 +981,9 @@ private actor ConversationNetworkFixture: CodexConversationNetworking, CodexMode
     private var olderGate: CheckedContinuation<Void, Never>?
     private var postWaiter: CheckedContinuation<Void, Never>?
     private var modelInputModalities = ["text", "image"]
+    private var historyReadCounts: [CodexConversationKey: Int] = [:]
 
+    func historyReadCount(for key: CodexConversationKey) -> Int { historyReadCounts[key, default: 0] }
     func configure(post: PostMode, receipt: ReceiptMode) { postMode = post; receiptMode = receipt }
     func setReceiptState(_ state: CodexMessageState) { receiptState = state }
     func failRelease(statusCode: Int) { releaseStatusCode = statusCode }
@@ -825,6 +1010,7 @@ private actor ConversationNetworkFixture: CodexConversationNetworking, CodexMode
     func finishOlderPage() { suspendOlder = false; olderGate?.resume(); olderGate = nil }
 
     func conversation(for key: CodexConversationKey, before: String?) async throws -> CodexConversationPage {
+        historyReadCounts[key, default: 0] += 1
         if historyUnavailable { throw NetworkService.NetworkError.server(statusCode: 503, message: "Desktop is offline") }
         let result = CodexConversationPage(hostId: pageHost ?? key.hostId, threadId: key.threadId, messages: before == nil ? pageMessages : olderMessages,
                               beforeCursor: before == nil ? pageCursor : olderCursor, runState: "idle",
@@ -854,6 +1040,7 @@ private actor ConversationNetworkFixture: CodexConversationNetworking, CodexMode
     }
     func messageReceipt(_ id: String, for key: CodexConversationKey) async throws -> CodexMessageReceipt {
         receiptReadCount += 1
+        receiptReadKeys.append(key)
         if receiptMode == .missing { throw NetworkService.NetworkError.server(statusCode: 404, message: "Not accepted") }
         if receiptMode == .unavailable { throw NetworkService.NetworkError.server(statusCode: 503, message: "Receipts are unavailable") }
         guard let request = requests.first(where: { $0.id == id }) else { throw URLError(.unknown) }

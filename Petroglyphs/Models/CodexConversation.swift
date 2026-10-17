@@ -223,3 +223,8 @@ struct CodexRecoveredDraft: Codable, Identifiable {
     let draft: CodexMessageDraft
     let createdAt: Date
 }
+
+struct CodexSubmissionReference: Codable, Equatable, Identifiable {
+    let id: String
+    let target: CodexChatTarget
+}

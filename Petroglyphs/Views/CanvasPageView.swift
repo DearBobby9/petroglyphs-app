@@ -229,6 +229,19 @@ struct CanvasPageView: View {
                 .padding(.horizontal, 16)
             }
         }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if let reference = appState.codexConversation.lastSubmission,
+               newChat != nil || !repliesExpanded || selectedTarget.map({ CodexConversationKey($0) }) != CodexConversationKey(reference.target) {
+                CodexWorkspaceRequestStatus(reference: reference, store: appState.codexConversation) {
+                    appState.selectedCodexChat = reference.target
+                    appState.newCodexChat = nil
+                    appState.codexConversation.setReadingPosition("user:\(reference.id)", atBottom: false, for: reference.target)
+                    repliesExpanded = true
+                    chatFocused = true
+                }
+                .padding(.horizontal, 16).padding(.bottom, 8)
+            }
+        }
         .task(id: ConversationRequest(target: newChat == nil ? selectedTarget : nil, isActive: scenePhase == .active)) {
             guard scenePhase == .active, newChat == nil, let target = selectedTarget else { return }
             await appState.codexConversation.observe(target: target)

@@ -60,14 +60,22 @@ final class CodexConversationSession {
 @MainActor
 @Observable
 final class CodexConversationStore {
+    private(set) var lastSubmission: CodexSubmissionReference?
     private var sessions: [CodexConversationKey: CodexConversationSession] = [:]
     @ObservationIgnored private let network: any CodexConversationNetworking
     @ObservationIgnored private let storageRoot: URL
+    @ObservationIgnored private let pollingSleep: @MainActor (TimeInterval) async throws -> Void
+    @ObservationIgnored private var pollingTasks: [CodexConversationKey: PollingTask] = [:]
+    @ObservationIgnored private var observers: [CodexConversationKey: [UUID: CheckedContinuation<Void, Never>]] = [:]
 
-    init(network: any CodexConversationNetworking = NetworkService(), storageRoot: URL? = nil) {
+    init(network: any CodexConversationNetworking = NetworkService(), storageRoot: URL? = nil,
+         pollingSleep: @escaping @MainActor (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) {
         self.network = network
+        self.pollingSleep = pollingSleep
         self.storageRoot = storageRoot ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("CodexConversations", isDirectory: true)
+        lastSubmission = (try? Data(contentsOf: self.storageRoot.appendingPathComponent("last-submission.json")))
+            .flatMap { try? JSONDecoder().decode(CodexSubmissionReference.self, from: $0) }
     }
 
     func session(for target: CodexChatTarget) -> CodexConversationSession {
@@ -210,12 +218,51 @@ final class CodexConversationStore {
     }
 
     func observe(target: CodexChatTarget) async {
+        guard !Task.isCancelled else { return }
+        let key = CodexConversationKey(target)
+        let observerID = UUID()
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                guard !Task.isCancelled else { continuation.resume(); return }
+                observers[key, default: [:]][observerID] = continuation
+                startPolling(target: target, key: key)
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.removeObserver(observerID, for: key) }
+        }
+    }
+
+    private func startPolling(target: CodexChatTarget, key: CodexConversationKey) {
+        guard pollingTasks[key] == nil else { return }
+        let generation = UUID()
+        let task = Task { [weak self] in
+            guard let self else { return }
+            await self.poll(target: target, key: key, generation: generation)
+        }
+        pollingTasks[key] = PollingTask(generation: generation, task: task)
+    }
+
+    private func removeObserver(_ id: UUID, for key: CodexConversationKey) {
+        let continuation = observers[key]?.removeValue(forKey: id)
+        if observers[key]?.isEmpty == true {
+            observers.removeValue(forKey: key)
+            pollingTasks.removeValue(forKey: key)?.task.cancel()
+        }
+        continuation?.resume()
+    }
+
+    private func poll(target: CodexChatTarget, key: CodexConversationKey, generation: UUID) async {
+        defer {
+            // A cancelled poller may finish after a new subscription has started.
+            if pollingTasks[key]?.generation == generation { pollingTasks.removeValue(forKey: key) }
+        }
         while !Task.isCancelled {
             await refresh(for: target)
+            guard !Task.isCancelled else { return }
             let session = session(for: target)
             let interval = session.activeCount > 0 ? 3.0
                 : min(24.0, (session.isBusy ? 3.0 : 8.0) * pow(2, Double(min(session.failedRefreshes, 3))))
-            do { try await Task.sleep(for: .seconds(interval)) }
+            do { try await pollingSleep(interval) }
             catch { return }
         }
     }
@@ -293,15 +340,18 @@ final class CodexConversationStore {
         }
     }
 
-    func sendDraft(to target: CodexChatTarget, modelSettings: CodexModelSettingsModel? = nil) async {
+    @discardableResult
+    func sendDraft(to target: CodexChatTarget, modelSettings: CodexModelSettingsModel? = nil) async -> CodexSubmissionReference? {
         let session = session(for: target)
-        guard !session.draft.isEmpty, session.importingCount == 0 else { return }
+        guard !session.draft.isEmpty, session.importingCount == 0 else { return nil }
         let draft = session.draft
         do {
             let selection = try validatedModelSelection(for: session, settings: modelSettings, hasImages: !draft.attachments.isEmpty)
             let local = try enqueue(text: draft.text, attachments: draft.attachments, selection: selection, session: session, clearDraft: true)
+            let reference = recordSubmission(local.id, target: target, session: session)
             await dispatch(local.id, session: session)
-        } catch { session.draftError = error.localizedDescription }
+            return reference
+        } catch { session.draftError = error.localizedDescription; return nil }
     }
 
     // Canvas sends have their own immutable submission and leave the text draft intact.
@@ -311,6 +361,7 @@ final class CodexConversationStore {
         let image = CodexImportedImage(data: pngData, name: "Canvas.png", mimeType: "image/png")
         let attachment = try persistImage(image, for: session.key)
         let local = try enqueue(text: "", attachments: [attachment], selection: selection, session: session, clearDraft: false)
+        _ = recordSubmission(local.id, target: target, session: session)
         await dispatch(local.id, session: session)
         let state = session.outgoing.first { $0.id == local.id }?.state
         return state == .pending || state == .queued || state == .running || state == .completed
@@ -412,6 +463,14 @@ final class CodexConversationStore {
         }
         session.draftError = nil
         return local
+    }
+
+    private func recordSubmission(_ id: String, target: CodexChatTarget, session: CodexConversationSession) -> CodexSubmissionReference {
+        let reference = CodexSubmissionReference(id: id, target: target)
+        lastSubmission = reference
+        do { try JSONEncoder().encode(reference).write(to: storageRoot.appendingPathComponent("last-submission.json"), options: .atomic) }
+        catch { session.draftError = "The request is saved in its chat, but the workspace status reference could not be saved." }
+        return reference
     }
 
     private func dispatch(_ id: String, session: CodexConversationSession) async {
@@ -557,6 +616,11 @@ final class CodexConversationStore {
         let beforeCursor: String?
         let hasLoadedOlder: Bool
         let receipts: [CodexMessageReceipt]?
+    }
+
+    private struct PollingTask {
+        let generation: UUID
+        let task: Task<Void, Never>
     }
 
     private struct SavedConversation: Codable {
