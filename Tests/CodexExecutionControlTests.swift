@@ -1,6 +1,18 @@
 import XCTest
 
 final class CodexExecutionControlTests: XCTestCase {
+    func testStopErrorJSONPreservesOnlyExplicitNotSentEvidence() throws {
+        for (json, notSent) in [
+            (#"{"error":"Unavailable","code":"controls_unavailable","outcome":"not_sent"}"#, true),
+            (#"{"error":"Unavailable","outcome":"unknown"}"#, false),
+            (#"{"error":"Unavailable"}"#, false)
+        ] {
+            XCTAssertThrowsError(try NetworkService.decodeControlResponse(Data(json.utf8), statusCode: 503) as CodexStopTurnResult) { error in
+                XCTAssertEqual(error is CodexControlNotSent, notSent)
+            }
+        }
+    }
+
     @MainActor
     func testUnknownStopNeverReplaysAndAnotherTurnRequiresFreshEvidence() async throws {
         let network = ControlNetworkFixture()
@@ -38,6 +50,26 @@ final class CodexExecutionControlTests: XCTestCase {
         XCTAssertEqual(model.controls?.activeTurnId, "turn-b")
         XCTAssertTrue(model.canStop)
         XCTAssertEqual(model.stopResult?.turnId, "turn-a")
+        XCTAssertNil(model.stopFeedback(for: "turn-b"))
+    }
+
+    @MainActor
+    func testNotSentAllowsManualRetryOnlyAfterFreshControls() async throws {
+        let network = ControlNetworkFixture()
+        await network.rejectWithoutSending()
+        let model = CodexExecutionControlModel(network: network)
+        await model.load(for: makeTarget())
+        await model.stop()
+        XCTAssertNil(model.uncertainTurnID)
+        XCTAssertFalse(model.canStop)
+        await model.stop()
+        let firstCount = await network.stopIDs.count
+        XCTAssertEqual(firstCount, 1)
+        await model.load(for: makeTarget())
+        XCTAssertTrue(model.canStop)
+        await model.stop()
+        let count = await network.stopIDs.count
+        XCTAssertEqual(count, 2)
     }
 
     private func makeTarget() -> CodexChatTarget {
@@ -50,6 +82,8 @@ final class CodexExecutionControlTests: XCTestCase {
 private actor ControlNetworkFixture: CodexExecutionControlNetworking {
     private var turnID = "turn-a"
     private var shouldSuspend = false
+    private var notSent = false
+    func rejectWithoutSending() { notSent = true }
     private var gate: CheckedContinuation<Void, Never>?
     private var entered: CheckedContinuation<Void, Never>?
     var stopIDs: [String] = []
@@ -69,6 +103,7 @@ private actor ControlNetworkFixture: CodexExecutionControlNetworking {
     }
     func stopTurn(_ turnID: String, for key: CodexConversationKey) async throws -> CodexStopTurnResult {
         stopIDs.append(turnID)
+        if notSent { throw CodexControlNotSent(message: "Unavailable before dispatch") }
         if shouldSuspend {
             await withCheckedContinuation { continuation in
                 gate = continuation

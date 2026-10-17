@@ -64,7 +64,7 @@ class ConnectionMonitor {
             do {
                 let snapshot = try await BridgeTransport.shared.connect(to: url, force: true)
                 guard let self, !Task.isCancelled, self.serverURL == url else { return }
-                self.requiresCodexThread = snapshot.health.autoReply?.enabled ?? false
+                self.requiresCodexThread = snapshot.health.supportsCodexConversations
                 self.activeEndpoint = snapshot.origin; self.route = snapshot.route
                 self.verifiedGeneration = snapshot.generation
                 self.backupReady = snapshot.backupReady

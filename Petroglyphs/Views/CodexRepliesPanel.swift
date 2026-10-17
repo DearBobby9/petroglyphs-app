@@ -472,6 +472,18 @@ private struct CodexMessageComposer: View {
                 }
                 .accessibilityIdentifier("chat.draftError")
             }
+            if session.stateRestorationFailed {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Preserve the unreadable file before saving a new draft. Unconfirmed requests in that file still need to be checked in Desktop.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Button("Preserve original and enable drafts") {
+                        do { try store.preserveUnreadableState(for: target) }
+                        catch { session.draftError = error.localizedDescription }
+                    }
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("chat.recoverProtectedState")
+                }
+            }
             if session.importingCount > 0 {
                 ProgressView("Adding image…").font(.caption)
             }

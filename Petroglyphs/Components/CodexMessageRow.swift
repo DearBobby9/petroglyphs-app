@@ -85,7 +85,7 @@ struct CodexMessageRow: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(message.uncertaintyNotice(receipt: receipt))
                             .font(.caption).foregroundStyle(.secondary)
-                        if receipt?.queueBlocking != false {
+                        if store.canReleaseWait(id, for: target) {
                             Button("Let later messages continue") { Task { await store.releaseWait(id, for: target) } }
                                 .font(.callout).frame(minHeight: 44)
                                 .accessibilityIdentifier("chat.releaseWait.\(id)")

@@ -854,6 +854,94 @@ final class CodexConversationStoreTests: XCTestCase {
         XCTAssertEqual(store.session(for: other).draft.text, "Independent work")
     }
 
+    func testModernHealthCapabilityOverridesLegacyWorkerFlag() throws {
+        let modern = Data(#"{"status":"ok","version":"test","submissions":0,"autoReply":{"enabled":false},"capabilities":{"conversations":true,"projects":true,"controls":true}}"#.utf8)
+        XCTAssertTrue(try JSONDecoder().decode(HealthResponse.self, from: modern).supportsCodexConversations)
+        let legacy = Data(#"{"status":"ok","version":"test","submissions":0,"autoReply":{"enabled":true}}"#.utf8)
+        XCTAssertTrue(try JSONDecoder().decode(HealthResponse.self, from: legacy).supportsCodexConversations)
+    }
+
+    @MainActor
+    func testRestoredUnknownWithQueuedReceiptDoesNotOfferIneffectiveRelease() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ConversationNetworkFixture()
+        let destination = target()
+        let store = CodexConversationStore(network: network, storageRoot: root)
+        store.setDraftText("Queued before restart", for: destination)
+        await store.sendDraft(to: destination)
+        await store.refresh(for: destination)
+        let id = try XCTUnwrap(store.session(for: destination).outgoing.first?.id)
+        let restored = CodexConversationStore(network: network, storageRoot: root)
+        XCTAssertFalse(restored.canReleaseWait(id, for: destination))
+        await restored.releaseWait(id, for: destination)
+        let count = await network.releaseCount
+        XCTAssertEqual(count, 0)
+    }
+
+    @MainActor
+    func testMovingSyntheticRowDoesNotDuplicateHistory() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ConversationNetworkFixture()
+        let store = CodexConversationStore(network: network, storageRoot: root)
+        let destination = target()
+        let rows = numberedMessages(1...5)
+        await network.setPage(messages: rows, host: destination.host.id)
+        await store.refresh(for: destination)
+        await network.setPage(messages: [rows[2], rows[3], rows[0], rows[4]], host: destination.host.id)
+        await store.refresh(for: destination)
+        let ids = store.session(for: destination).history.map(\.displayID)
+        XCTAssertEqual(ids.count, Set(ids).count)
+        XCTAssertEqual(ids, [rows[2], rows[3], rows[0], rows[4]].map(\.displayID))
+    }
+
+    @MainActor
+    func testSlowReceiptDoesNotBlockAnotherReceiptInTheBatch() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ConversationNetworkFixture()
+        let destination = target()
+        let store = CodexConversationStore(network: network, storageRoot: root)
+        store.setDraftText("First", for: destination)
+        await store.sendDraft(to: destination)
+        store.setDraftText("Second", for: destination)
+        await store.sendDraft(to: destination)
+        let ids = store.session(for: destination).outgoing.map(\.id)
+        XCTAssertEqual(ids.count, 2)
+        await network.suspendReceipt(ids[0])
+        await network.setReceiptState(.completed)
+        let refresh = Task { await store.refresh(for: destination) }
+        await waitUntil { store.localMessage(ids[1], for: destination)?.state == .completed }
+        XCTAssertEqual(store.localMessage(ids[0], for: destination)?.state, .queued)
+        await network.finishReceipt()
+        await refresh.value
+    }
+
+    @MainActor
+    func testReceiptPollingContinuesWhileHistoryIsSuspended() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ConversationNetworkFixture()
+        let clock = ConversationPollingClock()
+        let destination = target()
+        let store = CodexConversationStore(network: network, storageRoot: root, pollingSleep: clock.sleep)
+        store.setDraftText("Track this request", for: destination)
+        await store.sendDraft(to: destination)
+        await network.suspendHistory()
+        let observer = Task { await store.observe(target: destination) }
+        defer { observer.cancel() }
+        await waitUntil { clock.pendingCount == 1 }
+        await network.setReceiptState(.completed)
+        clock.advance()
+        await waitUntil { store.session(for: destination).outgoing.first?.state == .completed }
+        XCTAssertTrue(store.session(for: destination).isRefreshing)
+        await network.finishHistory()
+        observer.cancel()
+        await observer.value
+        await waitUntil { clock.pendingCount == 0 }
+    }
+
     @MainActor
     func testObserversSharePollingAndCancellingOneKeepsTheOtherAlive() async throws {
         let root = temporaryDirectory()
@@ -865,7 +953,7 @@ final class CodexConversationStoreTests: XCTestCase {
         let store = CodexConversationStore(network: network, storageRoot: root, pollingSleep: clock.sleep)
         let first = Task { await store.observe(target: destination) }
         defer { first.cancel() }
-        await waitUntil { clock.pendingCount == 1 }
+        await waitUntil { clock.pendingCount == 2 }
         var secondStarted = false
         let second = Task {
             secondStarted = true
@@ -876,10 +964,10 @@ final class CodexConversationStoreTests: XCTestCase {
         await second.value
         let readsAfterSecondObserver = await network.historyReadCount(for: key)
         XCTAssertEqual(readsAfterSecondObserver, 1, "Joining the same chat must reuse its poller rather than refresh again.")
-        XCTAssertEqual(clock.pendingCount, 1)
+        XCTAssertEqual(clock.pendingCount, 2)
 
         clock.advance()
-        await waitUntil { await network.historyReadCount(for: key) == 2 && clock.pendingCount == 1 }
+        await waitUntil { await network.historyReadCount(for: key) == 2 && clock.pendingCount == 2 }
         first.cancel()
         await first.value
         await waitUntil { clock.pendingCount == 0 }
@@ -889,7 +977,7 @@ final class CodexConversationStoreTests: XCTestCase {
         // A new observer starts one fresh poller after the old subscribers leave.
         let reopened = Task { await store.observe(target: destination) }
         defer { reopened.cancel() }
-        await waitUntil { await network.historyReadCount(for: key) == 3 && clock.pendingCount == 1 }
+        await waitUntil { await network.historyReadCount(for: key) == 3 && clock.pendingCount == 2 }
         reopened.cancel()
         await reopened.value
         await waitUntil { clock.pendingCount == 0 }
@@ -917,18 +1005,18 @@ final class CodexConversationStoreTests: XCTestCase {
         let selectedOriginal = Task { await store.observe(target: original) }
         let requestCard = Task { await store.observe(target: reference.target) }
         defer { selectedOriginal.cancel(); requestCard.cancel() }
-        await waitUntil { clock.pendingCount == 1 }
+        await waitUntil { clock.pendingCount == 2 }
         selectedOriginal.cancel()
         await selectedOriginal.value
         store.setDraftText("Independent second chat", for: other)
         let selectedOther = Task { await store.observe(target: other) }
         defer { selectedOther.cancel() }
-        await waitUntil { clock.pendingCount == 2 }
+        await waitUntil { clock.pendingCount == 4 }
 
         await network.configure(post: .accepted, receipt: .accepted)
         await network.setReceiptState(.completed)
         clock.advance()
-        await waitUntil { store.localMessage(reference.id, for: original)?.state == .completed && clock.pendingCount == 2 }
+        await waitUntil { store.localMessage(reference.id, for: original)?.state == .completed && clock.pendingCount == 4 }
         XCTAssertEqual(store.lastSubmission, reference)
         XCTAssertEqual(store.session(for: other).draft.text, "Independent second chat")
         XCTAssertTrue(store.session(for: other).outgoing.isEmpty)
@@ -963,7 +1051,7 @@ final class CodexConversationStoreTests: XCTestCase {
         let requestCard = Task { await restored.observe(target: restoredReference.target) }
         let selectedOther = Task { await restored.observe(target: other) }
         defer { requestCard.cancel(); selectedOther.cancel() }
-        await waitUntil { restored.localMessage(reference.id, for: original)?.state == .completed && clock.pendingCount == 2 }
+        await waitUntil { restored.localMessage(reference.id, for: original)?.state == .completed && clock.pendingCount == 4 }
         let requests = await network.requests
         let receiptKeys = await network.receiptReadKeys
         XCTAssertEqual(requests.count, 1)
@@ -1055,7 +1143,15 @@ private actor ConversationNetworkFixture: CodexConversationNetworking, CodexMode
     private var postMode = PostMode.accepted
     private var receiptMode = ReceiptMode.accepted
     private var historyUnavailable = false
+    private var holdHistory = false
+    private var historyGate: CheckedContinuation<Void, Never>?
+    func suspendHistory() { holdHistory = true }
+    func finishHistory() { holdHistory = false; historyGate?.resume(); historyGate = nil }
     private var receiptState = CodexMessageState.queued
+    private var heldReceipt: String?
+    private var receiptGate: CheckedContinuation<Void, Never>?
+    func suspendReceipt(_ id: String) { heldReceipt = id }
+    func finishReceipt() { heldReceipt = nil; receiptGate?.resume(); receiptGate = nil }
     private var releaseStatusCode: Int?
     private var pageMessages: [CodexConversationMessage] = []
     private var pageReceipts: [CodexMessageReceipt] = []
@@ -1100,6 +1196,7 @@ private actor ConversationNetworkFixture: CodexConversationNetworking, CodexMode
 
     func conversation(for key: CodexConversationKey, before: String?) async throws -> CodexConversationPage {
         historyReadCounts[key, default: 0] += 1
+        if holdHistory { await withCheckedContinuation { historyGate = $0 } }
         if historyUnavailable { throw NetworkService.NetworkError.server(statusCode: 503, message: "Desktop is offline") }
         let result = CodexConversationPage(hostId: pageHost ?? key.hostId, threadId: key.threadId, messages: before == nil ? pageMessages : olderMessages,
                               beforeCursor: before == nil ? pageCursor : olderCursor, runState: "idle",
@@ -1129,6 +1226,7 @@ private actor ConversationNetworkFixture: CodexConversationNetworking, CodexMode
     }
     func messageReceipt(_ id: String, for key: CodexConversationKey) async throws -> CodexMessageReceipt {
         receiptReadCount += 1
+        if id == heldReceipt { await withCheckedContinuation { receiptGate = $0 } }
         receiptReadKeys.append(key)
         if receiptMode == .missing { throw NetworkService.NetworkError.server(statusCode: 404, message: "Not accepted") }
         if receiptMode == .unavailable { throw NetworkService.NetworkError.server(statusCode: 503, message: "Receipts are unavailable") }

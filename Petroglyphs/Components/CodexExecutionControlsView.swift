@@ -9,7 +9,7 @@ struct CodexExecutionControlsView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if let result = model.stopResult {
+            if let result = model.stopFeedback(for: latestTurnID) {
                 Label(result.status == "already_finished" ? "This turn already finished" : "Stop confirmed", systemImage: "checkmark.circle")
                     .font(.caption).foregroundStyle(.secondary)
             }

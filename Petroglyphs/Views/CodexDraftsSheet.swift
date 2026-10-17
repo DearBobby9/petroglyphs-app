@@ -3,6 +3,9 @@ import SwiftUI
 struct CodexDraftsSheet: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
+    let serverURL: URL?
+    @State private var recovering: CodexCreationDraftSummary?
+    @State private var recoveryError: String?
     let onStartIndependent: () -> Void
 
     var body: some View {
@@ -24,8 +27,8 @@ struct CodexDraftsSheet: View {
                     }
                     ForEach(appState.creationDrafts) { draft in
                         Button {
-                            appState.resumeCreationDraft(draft)
-                            dismiss()
+                            if draft.destination == nil { recovering = draft }
+                            else { appState.resumeCreationDraft(draft); dismiss() }
                         } label: {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(draft.displayTitle.isEmpty ? "Untitled draft" : draft.displayTitle).font(.headline).foregroundStyle(Color.charcoal)
@@ -46,7 +49,7 @@ struct CodexDraftsSheet: View {
                             .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
                         }
                         .buttonStyle(.plain)
-                        .disabled(draft.destination == nil || draft.recoveryError != nil)
+                        .disabled(draft.state == "unreadable" || (draft.destination == nil && serverURL == nil))
                         .accessibilityIdentifier("chat.savedDraft.\(draft.id)")
                     }
                 }
@@ -55,6 +58,20 @@ struct CodexDraftsSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
             .task { appState.refreshCreationDrafts() }
+            .sheet(item: $recovering) { draft in
+                if let serverURL {
+                    CodexThreadPickerView(serverURL: serverURL, selection: .constant(nil), creationOnly: true,
+                        onNewChat: { host, project in
+                            do {
+                                appState.newCodexChat = try CodexProjectCreationModel.recoverLegacyDraft(draft, project: project, host: host, serverURL: serverURL)
+                                dismiss()
+                            } catch { recoveryError = error.localizedDescription }
+                        })
+                }
+            }
+            .alert("Could not recover this draft", isPresented: Binding(get: { recoveryError != nil }, set: { if !$0 { recoveryError = nil } })) {
+                Button("OK") { recoveryError = nil }
+            } message: { Text(recoveryError ?? "") }
         }
     }
 }

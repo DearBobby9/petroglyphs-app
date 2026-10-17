@@ -65,6 +65,7 @@ final class CodexConversationStore {
     @ObservationIgnored private let network: any CodexConversationNetworking
     @ObservationIgnored private let storageRoot: URL
     @ObservationIgnored private let pollingSleep: @MainActor (TimeInterval) async throws -> Void
+    @ObservationIgnored private var receiptReads: Set<String> = []
     @ObservationIgnored private var pollingTasks: [CodexConversationKey: PollingTask] = [:]
     @ObservationIgnored private var observers: [CodexConversationKey: [UUID: CheckedContinuation<Void, Never>]] = [:]
 
@@ -256,8 +257,21 @@ final class CodexConversationStore {
             // A cancelled poller may finish after a new subscription has started.
             if pollingTasks[key]?.generation == generation { pollingTasks.removeValue(forKey: key) }
         }
+        async let receipts: Void = pollReceipts(target: target)
+        await pollHistory(target: target)
+        _ = await receipts
+    }
+
+    private func pollReceipts(target: CodexChatTarget) async {
         while !Task.isCancelled {
-            await refresh(for: target)
+            await refreshReceipts(session(for: target))
+            do { try await pollingSleep(3) } catch { return }
+        }
+    }
+
+    private func pollHistory(target: CodexChatTarget) async {
+        while !Task.isCancelled {
+            await refreshHistory(for: target)
             guard !Task.isCancelled else { return }
             let session = session(for: target)
             let interval = session.activeCount > 0 ? 3.0
@@ -268,12 +282,17 @@ final class CodexConversationStore {
     }
 
     func refresh(for target: CodexChatTarget) async {
+        async let receipts: Void = refreshReceipts(session(for: target))
+        await refreshHistory(for: target)
+        await receipts
+    }
+
+    private func refreshHistory(for target: CodexChatTarget) async {
         let session = session(for: target)
         guard !session.isRefreshing else { return }
         session.isRefreshing = true
         session.isLoading = !session.hasLoaded && session.history.isEmpty
         defer { session.isRefreshing = false; session.isLoading = false }
-        async let receiptRefresh: Void = refreshReceipts(session)
         do {
             let page = try await network.conversation(for: session.key, before: nil)
             guard !Task.isCancelled else { return }
@@ -282,7 +301,15 @@ final class CodexConversationStore {
             // new page starts inside it; disjoint windows must be paged again.
             if let firstID = page.messages.first?.displayID,
                let overlap = session.history.firstIndex(where: { $0.displayID == firstID }) {
-                session.history = Array(session.history[..<overlap]) + page.messages
+                let currentIDs = Set(page.messages.map(\.displayID))
+                let prefix = session.history[..<overlap].filter { !currentIDs.contains($0.displayID) }
+                // A moved row invalidates the old opaque cursor and any in-flight older page.
+                if prefix.count != overlap {
+                    session.historyGeneration += 1
+                    session.history = page.messages
+                    session.beforeCursor = page.beforeCursor
+                    session.hasLoadedOlder = false
+                } else { session.history = prefix + page.messages }
             } else {
                 session.historyGeneration += 1
                 session.history = page.messages
@@ -305,7 +332,6 @@ final class CodexConversationStore {
             session.error = error.localizedDescription
             session.failedRefreshes += 1
         }
-        await receiptRefresh
     }
 
     func loadOlder(for target: CodexChatTarget) async {
@@ -377,17 +403,18 @@ final class CodexConversationStore {
         await dispatch(id, session: session)
     }
 
+    func canReleaseWait(_ id: String, for target: CodexChatTarget) -> Bool {
+        let session = session(for: target)
+        guard session.queueActionID == nil else { return false }
+        if let receipt = session.receipts[id] {
+            return receipt.state == .unknown && receipt.queueBlocking != false
+        }
+        return session.outgoing.contains { $0.id == id && $0.state == .unknown && !$0.canRetry }
+    }
+
     func releaseWait(_ id: String, for target: CodexChatTarget) async {
         let session = session(for: target)
-        guard session.queueActionID == nil else { return }
-        if let receipt = session.receipts[id] {
-            guard receipt.state == .unknown, receipt.queueBlocking != false else { return }
-        } else {
-            // A lost POST response and unavailable receipt read can leave only the
-            // original local request. The bridge must decide whether it can release it.
-            guard let local = session.outgoing.first(where: { $0.id == id }),
-                  local.state == .unknown, !local.canRetry else { return }
-        }
+        guard canReleaseWait(id, for: target) else { return }
         await changeQueueState(id, session: session, release: true)
     }
 
@@ -503,18 +530,31 @@ final class CodexConversationStore {
         let ids = session.outgoing.filter { !$0.state.isTerminal && $0.state != .dispatching && !$0.canRetry }.map(\.id)
         guard !ids.isEmpty else { return }
         session.receiptError = nil
-        for id in ids {
-            guard !Task.isCancelled else { return }
-            await reconcile(id, session: session)
-            saveReportingFailure(session)
+        await withTaskGroup(of: Void.self) { group in
+            var pending = ids.makeIterator()
+            for _ in 0..<min(4, ids.count) {
+                if let id = pending.next() {
+                    group.addTask { @MainActor in await self.reconcile(id, session: session) }
+                }
+            }
+            while await group.next() != nil {
+                saveReportingFailure(session)
+                if !Task.isCancelled, let id = pending.next() {
+                    group.addTask { @MainActor in await self.reconcile(id, session: session) }
+                }
+            }
         }
         do { try saveHistory(session) }
         catch { session.receiptError = "Could not save message receipts. \(error.localizedDescription)" }
     }
 
     private func reconcile(_ id: String, session: CodexConversationSession) async {
+        let readKey = "\(session.key.storageID):\(id)"
+        guard receiptReads.insert(readKey).inserted else { return }
+        defer { receiptReads.remove(readKey) }
         do {
             let receipt = try await network.messageReceipt(id, for: session.key)
+            guard !Task.isCancelled else { return }
             guard receipt.id == id else { throw ConversationError.wrongDestination }
             try apply(receipt, to: session)
         } catch {

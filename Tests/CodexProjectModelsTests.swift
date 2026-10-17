@@ -691,6 +691,55 @@ final class CodexProjectModelsTests: XCTestCase {
         XCTAssertEqual(posts[1].prompt, "Revised message")
     }
 
+    @MainActor
+    func testFailedEditPreservesOriginalRequestWhenAtomicSaveFails() async throws {
+        let root = temporaryDirectory()
+        let backup = root.appendingPathExtension("backup")
+        defer { try? FileManager.default.removeItem(at: root); try? FileManager.default.removeItem(at: backup) }
+        let network = ProjectNetworkFixture()
+        await network.configure(post: .failed, receipt: .unknown)
+        let model = creation(network, root: root)
+        model.prompt = "Keep my request"
+        await model.submit()
+        let requestID = try XCTUnwrap(model.request?.id)
+        let file = root.appendingPathComponent(model.draftID + ".json")
+        let originalBytes = try Data(contentsOf: file)
+        try FileManager.default.moveItem(at: root, to: backup)
+        try Data("blocks directory creation".utf8).write(to: root)
+        model.editFailedAttempt()
+        XCTAssertEqual(model.request?.id, requestID)
+        XCTAssertNotNil(model.storageError)
+        try FileManager.default.removeItem(at: root)
+        try FileManager.default.moveItem(at: backup, to: root)
+        XCTAssertEqual(try Data(contentsOf: file), originalBytes)
+        XCTAssertEqual(creation(network, root: root).request?.id, requestID)
+    }
+
+    @MainActor
+    func testLegacyDraftRecoveryRequiresExactOriginalDestinationWithoutSending() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ProjectNetworkFixture()
+        await network.configure(post: .failed, receipt: .unknown)
+        let model = creation(network, root: root)
+        model.prompt = "Old request"
+        await model.submit()
+        let file = root.appendingPathComponent(model.draftID + ".json")
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        object.removeValue(forKey: "destination")
+        let bytes = try JSONSerialization.data(withJSONObject: object)
+        try bytes.write(to: file)
+        let summary = try XCTUnwrap(CodexProjectCreationModel.savedDrafts(storageRoot: root).first)
+        XCTAssertThrowsError(try CodexProjectCreationModel.recoverLegacyDraft(summary, project: model.project, host: model.host,
+            serverURL: URL(string: "http://wrong.invalid")!, storageRoot: root))
+        let recovered = try CodexProjectCreationModel.recoverLegacyDraft(summary, project: model.project, host: model.host,
+            serverURL: model.serverURL, storageRoot: root)
+        XCTAssertEqual(recovered.request?.id, model.request?.id)
+        XCTAssertEqual(try Data(contentsOf: file), bytes)
+        let count = await network.posts.count
+        XCTAssertEqual(count, 1)
+    }
+
     private var server: URL { URL(string: "http://test.invalid/device/paired")! }
 
     private func temporaryDirectory() -> URL {

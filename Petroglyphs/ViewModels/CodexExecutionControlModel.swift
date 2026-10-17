@@ -22,6 +22,11 @@ final class CodexExecutionControlModel {
             && controls?.activeTurnId != uncertainTurnID && !isStopping
     }
 
+    func stopFeedback(for turnID: String?) -> CodexStopTurnResult? {
+        guard let result = stopResult, result.turnId == turnID else { return nil }
+        return result
+    }
+
     func load(for target: CodexChatTarget) async {
         let key = CodexConversationKey(target)
         let id = UUID()
@@ -59,6 +64,12 @@ final class CodexExecutionControlModel {
             error = nil
         } catch {
             guard self.key == key, destinationGeneration == generation else { return }
+            if let failure = error as? CodexControlNotSent {
+                uncertainTurnID = nil
+                controls = nil // Require a fresh capability read before a manual retry.
+                self.error = "Stop was not sent. Refresh controls to try again. \(failure.localizedDescription)"
+                return
+            }
             // A lost response may follow a successful stop. Never retry it from polling.
             uncertainTurnID = turnID
             self.error = "The stop result is not confirmed. Check this turn in Codex in ChatGPT Desktop. \(error.localizedDescription)"

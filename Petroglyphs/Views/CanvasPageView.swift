@@ -320,7 +320,7 @@ struct CanvasPageView: View {
         }
         .sheet(isPresented: $showConnectionSettings) { ServerSettingsSheet() }
         .sheet(isPresented: $showSavedDrafts) {
-            CodexDraftsSheet {
+            CodexDraftsSheet(serverURL: connectionMonitor.serverURL) {
                 if let url = connectionMonitor.serverURL {
                     pickerServer = PickerServer(url: url, creationOnly: true, independent: true)
                 }

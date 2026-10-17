@@ -50,6 +50,30 @@ final class CodexProjectCreationModel {
         restore()
     }
 
+    static func recoverLegacyDraft(_ summary: CodexCreationDraftSummary, project: CodexProject,
+                                   host: CodexHost, serverURL: URL, storageRoot: URL? = nil) throws -> CodexProjectCreationModel {
+        let key = Data("\(serverURL.absoluteString)\n\(host.id)\n\(project.id)".utf8)
+        let expected = SHA256.hash(data: key).map { String(format: "%02x", $0) }.joined()
+        guard summary.destination == nil, summary.state != "unreadable", summary.id == expected else {
+            throw LegacyRecoveryError.wrongDestination
+        }
+        let file = (storageRoot ?? defaultStorageRoot).appendingPathComponent(expected + ".json")
+        let saved = try JSONDecoder().decode(SavedCreation.self, from: Data(contentsOf: file))
+        guard saved.destination == nil, (1...2).contains(saved.version ?? 1) else { throw LegacyRecoveryError.wrongDestination }
+        let model = CodexProjectCreationModel(project: project, host: host, serverURL: serverURL, storageRoot: storageRoot)
+        guard !model.restorationFailed, model.serverURL == serverURL,
+              model.host.id == host.id, model.project.id == project.id, model.request?.id == summary.requestID,
+              model.request.map({ $0.hostId == host.id && $0.projectId == project.id }) ?? true else {
+            throw LegacyRecoveryError.wrongDestination
+        }
+        return model
+    }
+
+    enum LegacyRecoveryError: LocalizedError {
+        case wrongDestination
+        var errorDescription: String? { "This is not the original server, connection and project for this record. Choose its original destination. The saved request has not been changed or sent." }
+    }
+
     static var defaultStorageRoot: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("CodexProjectCreations", isDirectory: true)
@@ -330,24 +354,22 @@ final class CodexProjectCreationModel {
     }
 
     private func clearFailedRequestAssociation() {
-        do {
-            if FileManager.default.fileExists(atPath: fileURL.path) {
-                try FileManager.default.removeItem(at: fileURL)
-            }
-            // Only a confirmed safe failure can reach this explicit local action.
-            // The server job is retained; Start chat must create a separate request.
-            request = nil
-            receipt = nil
-            isConfirmedMissing = false
-            error = nil
-            storageError = nil
-            statusChecksPaused = false
-            retryPendingAttemptId = nil
-            localValidationRejection = false
-            _ = save()
-        } catch {
-            storageError = "The failed request could not be cleared. Its saved record has been kept."
+        // Atomic replacement preserves the only durable copy until the new draft is saved.
+        let previousRequest = request, previousReceipt = receipt
+        let previousRejection = localValidationRejection
+        request = nil
+        receipt = nil
+        localValidationRejection = false
+        guard save() else {
+            request = previousRequest
+            receipt = previousReceipt
+            localValidationRejection = previousRejection
+            return
         }
+        isConfirmedMissing = false
+        error = nil
+        statusChecksPaused = false
+        retryPendingAttemptId = nil
     }
 
     private func postOriginal() async {
