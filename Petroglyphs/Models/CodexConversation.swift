@@ -19,9 +19,9 @@ struct CodexConversationKey: Hashable, Codable {
 }
 
 enum CodexMessageState: String, Codable {
-    case pending, dispatching, queued, running, completed, failed, unknown
+    case pending, dispatching, queued, running, completed, failed, unknown, cancelled
 
-    var isTerminal: Bool { self == .completed || self == .failed }
+    var isTerminal: Bool { self == .completed || self == .failed || self == .cancelled }
     var label: String {
         switch self {
         case .pending: "Waiting to send"
@@ -31,6 +31,7 @@ enum CodexMessageState: String, Codable {
         case .completed: "Sent"
         case .failed: "Could not complete"
         case .unknown: "Checking delivery…"
+        case .cancelled: "Removed from queue"
         }
     }
 }
@@ -76,6 +77,8 @@ struct CodexMessageReceipt: Codable, Identifiable, Equatable {
     let selection: CodexModelSelection?
     let modelEvidence: CodexModelEvidence?
     let modelVerification: String?
+    var queueBlocking: Bool? = nil
+    var waitReleasedAt: Date? = nil
 
     init(id: String, hostId: String, threadId: String, createdAt: Date, updatedAt: Date,
          state: CodexMessageState, turnId: String?, message: CodexConversationMessage,

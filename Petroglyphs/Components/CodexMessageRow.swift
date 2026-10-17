@@ -66,6 +66,25 @@ struct CodexMessageRow: View {
                         .frame(minHeight: 44)
                         .accessibilityIdentifier("chat.retry.\(id)")
                 }
+                if message.state == .unknown, let id = message.clientMessageId ?? receipt?.id {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(receipt?.queueBlocking == false ? "This uncertain request no longer blocks the queue." : "Delivery is uncertain. This request is still being checked.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if receipt?.queueBlocking != false {
+                            Button("Let later messages continue") { Task { await store.releaseWait(id, for: target) } }
+                                .font(.callout).frame(minHeight: 44)
+                                .accessibilityIdentifier("chat.releaseWait.\(id)")
+                            Text("This keeps the original request. It does not resend the message or stop remote execution.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Text("Request \(id)").font(.caption2.monospaced()).textSelection(.enabled)
+                    }
+                }
+                if receipt?.state == .pending, let id = receipt?.id {
+                    Button("Cancel queued message") { Task { await store.cancelPending(id, for: target) } }
+                        .font(.callout).frame(minHeight: 44)
+                        .accessibilityIdentifier("chat.cancelPending.\(id)")
+                }
             } else if !message.text.isEmpty {
                 Button {
                     UIPasteboard.general.string = message.text

@@ -498,6 +498,104 @@ final class CodexConversationStoreTests: XCTestCase {
         XCTAssertEqual(requests.count, 1)
     }
 
+    @MainActor
+    func testReleaseUnknownWaitKeepsOriginalRequestAndLateReceiptAcrossRestart() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ConversationNetworkFixture()
+        let destination = target()
+        let store = CodexConversationStore(network: network, storageRoot: root)
+        await network.setReceiptState(.unknown)
+        store.setDraftText("Uncertain A", for: destination)
+        await store.sendDraft(to: destination)
+        let original = try XCTUnwrap(store.session(for: destination).outgoing.first)
+        await store.releaseWait(original.id, for: destination)
+        await store.releaseWait(original.id, for: destination)
+        XCTAssertEqual(store.receipt(original.id, for: destination)?.state, .unknown)
+        XCTAssertEqual(store.receipt(original.id, for: destination)?.queueBlocking, false)
+        let restored = CodexConversationStore(network: network, storageRoot: root)
+        XCTAssertEqual(restored.receipt(original.id, for: destination)?.queueBlocking, false)
+        await restored.cancelPending(original.id, for: destination)
+        await network.setReceiptState(.completed)
+        await restored.refresh(for: destination)
+        XCTAssertEqual(restored.localMessage(original.id, for: destination)?.state, .completed)
+        let requests = await network.requests
+        let releases = await network.releaseCount
+        let cancels = await network.cancelCount
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(releases, 1)
+        XCTAssertEqual(cancels, 0, "An unknown request already crossed the send boundary.")
+    }
+
+    @MainActor
+    func testReleaseUnknownWithoutCachedReceiptUsesBackendAndPreservesRequest() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ConversationNetworkFixture()
+        await network.configure(post: .timeout, receipt: .unavailable)
+        await network.setReceiptState(.unknown)
+        let destination = target()
+        let store = CodexConversationStore(network: network, storageRoot: root)
+        store.setDraftText("Uncertain original request", for: destination)
+        let selection = CodexDraftModelSelection(model: "model-a", reasoningEffort: "high")
+        store.setDraftModelSelection(selection, for: destination)
+        try store.addImage(CodexImportedImage(data: imageBytes(), name: "Original.png", mimeType: "image/png"), for: destination)
+        await store.sendDraft(to: destination)
+        let original = try XCTUnwrap(store.session(for: destination).outgoing.first)
+        XCTAssertEqual(original.state, .unknown)
+        XCTAssertNil(store.receipt(original.id, for: destination))
+        store.setDraftText("Separate next draft", for: destination)
+
+        await store.releaseWait(original.id, for: destination)
+        await store.releaseWait(original.id, for: destination)
+        let released = try XCTUnwrap(store.localMessage(original.id, for: destination))
+        XCTAssertEqual(released.id, original.id)
+        XCTAssertEqual(released.text, original.text)
+        XCTAssertEqual(released.attachments, original.attachments)
+        XCTAssertEqual(released.selection, original.selection)
+        XCTAssertEqual(released.state, .unknown)
+        XCTAssertFalse(released.canRetry)
+        XCTAssertEqual(store.receipt(original.id, for: destination)?.queueBlocking, false)
+        XCTAssertEqual(store.session(for: destination).draft.text, "Separate next draft")
+        let restored = CodexConversationStore(network: network, storageRoot: root)
+        XCTAssertEqual(restored.receipt(original.id, for: destination)?.queueBlocking, false)
+        await network.configure(post: .accepted, receipt: .accepted)
+        await network.setReceiptState(.completed)
+        await restored.refresh(for: destination)
+        XCTAssertEqual(restored.localMessage(original.id, for: destination)?.state, .completed)
+        let requests = await network.requests
+        let releases = await network.releaseCount
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(releases, 1)
+    }
+
+    @MainActor
+    func testRejectedReleaseWithoutCachedReceiptKeepsUnknownEvidenceAndReportsError() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ConversationNetworkFixture()
+        await network.configure(post: .timeout, receipt: .unavailable)
+        await network.failRelease(statusCode: 404)
+        let destination = target()
+        let store = CodexConversationStore(network: network, storageRoot: root)
+        store.setDraftText("Keep uncertain evidence", for: destination)
+        await store.sendDraft(to: destination)
+        let original = try XCTUnwrap(store.session(for: destination).outgoing.first)
+        await store.releaseWait(original.id, for: destination)
+        XCTAssertNil(store.receipt(original.id, for: destination))
+        XCTAssertEqual(store.localMessage(original.id, for: destination)?.message, original.message)
+        XCTAssertEqual(store.localMessage(original.id, for: destination)?.canRetry, false)
+        XCTAssertNotNil(store.session(for: destination).receiptError)
+        XCTAssertNil(store.session(for: destination).queueActionID)
+        let requests = await network.requests
+        let releases = await network.releaseCount
+        XCTAssertEqual(requests.count, 1)
+        XCTAssertEqual(releases, 1)
+        let restored = CodexConversationStore(network: network, storageRoot: root)
+        XCTAssertEqual(restored.localMessage(original.id, for: destination)?.state, .unknown)
+        XCTAssertEqual(restored.localMessage(original.id, for: destination)?.canRetry, false)
+    }
+
     private func numberedMessages(_ numbers: ClosedRange<Int>) -> [CodexConversationMessage] {
         numbers.map { index in
             CodexConversationMessage(id: "message-\(index)", turnId: nil, clientMessageId: nil, role: "assistant", text: "Message \(index)", phase: "final_answer", createdAt: Date(timeIntervalSince1970: Double(index)), state: .completed, attachments: [])
@@ -533,13 +631,16 @@ final class CodexConversationStoreTests: XCTestCase {
 private actor ConversationNetworkFixture: CodexConversationNetworking, CodexModelSettingsNetworking {
     static let modelObservedAt = Date(timeIntervalSince1970: 1_800_000_000)
     enum PostMode { case accepted, timeout, suspended }
-    enum ReceiptMode { case accepted, missing }
+    enum ReceiptMode { case accepted, missing, unavailable }
     var requests: [CodexMessageRequest] = []
     var receiptReadCount = 0
+    var releaseCount = 0
+    var cancelCount = 0
     private var postMode = PostMode.accepted
     private var receiptMode = ReceiptMode.accepted
     private var historyUnavailable = false
     private var receiptState = CodexMessageState.queued
+    private var releaseStatusCode: Int?
     private var pageMessages: [CodexConversationMessage] = []
     private var pageReceipts: [CodexMessageReceipt] = []
     private var pageHost: String?
@@ -552,6 +653,8 @@ private actor ConversationNetworkFixture: CodexConversationNetworking, CodexMode
     private var modelInputModalities = ["text", "image"]
 
     func configure(post: PostMode, receipt: ReceiptMode) { postMode = post; receiptMode = receipt }
+    func setReceiptState(_ state: CodexMessageState) { receiptState = state }
+    func failRelease(statusCode: Int) { releaseStatusCode = statusCode }
     func failHistoryAndCompleteReceipt() { historyUnavailable = true; receiptState = .completed }
     func setModelInputModalities(_ value: [String]) { modelInputModalities = value }
     func setPage(messages: [CodexConversationMessage], host: String, receipts: [CodexMessageReceipt] = []) {
@@ -590,8 +693,22 @@ private actor ConversationNetworkFixture: CodexConversationNetworking, CodexMode
     func messageReceipt(_ id: String, for key: CodexConversationKey) async throws -> CodexMessageReceipt {
         receiptReadCount += 1
         if receiptMode == .missing { throw NetworkService.NetworkError.server(statusCode: 404, message: "Not accepted") }
+        if receiptMode == .unavailable { throw NetworkService.NetworkError.server(statusCode: 503, message: "Receipts are unavailable") }
         guard let request = requests.first(where: { $0.id == id }) else { throw URLError(.unknown) }
         return receipt(request, key: key)
+    }
+    func releaseMessageWait(_ id: String, for key: CodexConversationKey) async throws -> CodexMessageReceipt {
+        releaseCount += 1
+        if let releaseStatusCode { throw NetworkService.NetworkError.server(statusCode: releaseStatusCode, message: "Could not release this request") }
+        guard let body = requests.first(where: { $0.id == id }) else { throw URLError(.unknown) }
+        var result = receipt(body, key: key)
+        result.queueBlocking = false
+        result.waitReleasedAt = Date()
+        return result
+    }
+    func cancelPendingMessage(_ id: String, for key: CodexConversationKey) async throws -> CodexMessageReceipt {
+        cancelCount += 1
+        throw NetworkService.NetworkError.server(statusCode: 409, message: "Cannot cancel")
     }
     func conversationImage(at path: String, for key: CodexConversationKey) async throws -> Data { throw URLError(.fileDoesNotExist) }
     func codexModels(from serverURL: URL, hostId: String) async throws -> CodexModelCatalog {

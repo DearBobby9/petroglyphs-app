@@ -16,6 +16,7 @@ final class CodexConversationSession {
     var isLoading = false
     var isRefreshing = false
     var isLoadingOlder = false
+    var queueActionID: String?
     var hasLoaded = false
     var hasLoadedOlder = false
     var error: String?
@@ -257,6 +258,40 @@ final class CodexConversationStore {
         do { try save(session) }
         catch { session.outgoing[index].canRetry = true; session.draftError = error.localizedDescription; return }
         await dispatch(id, session: session)
+    }
+
+    func releaseWait(_ id: String, for target: CodexChatTarget) async {
+        let session = session(for: target)
+        guard session.queueActionID == nil else { return }
+        if let receipt = session.receipts[id] {
+            guard receipt.state == .unknown, receipt.queueBlocking != false else { return }
+        } else {
+            // A lost POST response and unavailable receipt read can leave only the
+            // original local request. The bridge must decide whether it can release it.
+            guard let local = session.outgoing.first(where: { $0.id == id }),
+                  local.state == .unknown, !local.canRetry else { return }
+        }
+        await changeQueueState(id, session: session, release: true)
+    }
+
+    func cancelPending(_ id: String, for target: CodexChatTarget) async {
+        let session = session(for: target)
+        guard session.queueActionID == nil, session.receipts[id]?.state == .pending else { return }
+        await changeQueueState(id, session: session, release: false)
+    }
+
+    private func changeQueueState(_ id: String, session: CodexConversationSession, release: Bool) async {
+        session.queueActionID = id
+        defer { session.queueActionID = nil }
+        do {
+            let receipt = try await (release ? network.releaseMessageWait(id, for: session.key)
+                : network.cancelPendingMessage(id, for: session.key))
+            guard receipt.id == id else { throw ConversationError.wrongDestination }
+            try apply(receipt, to: session)
+            try save(session)
+            try saveHistory(session)
+            session.receiptError = nil
+        } catch { session.receiptError = error.localizedDescription }
     }
 
     func localMessage(_ id: String?, for target: CodexChatTarget) -> CodexLocalMessage? {

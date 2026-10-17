@@ -4,7 +4,18 @@ protocol CodexConversationNetworking {
     func conversation(for key: CodexConversationKey, before: String?) async throws -> CodexConversationPage
     func sendMessage(_ body: CodexMessageRequest, for key: CodexConversationKey) async throws -> CodexMessageReceipt
     func messageReceipt(_ id: String, for key: CodexConversationKey) async throws -> CodexMessageReceipt
+    func releaseMessageWait(_ id: String, for key: CodexConversationKey) async throws -> CodexMessageReceipt
+    func cancelPendingMessage(_ id: String, for key: CodexConversationKey) async throws -> CodexMessageReceipt
     func conversationImage(at path: String, for key: CodexConversationKey) async throws -> Data
+}
+
+extension CodexConversationNetworking {
+    func releaseMessageWait(_ id: String, for key: CodexConversationKey) async throws -> CodexMessageReceipt {
+        throw NetworkService.NetworkError.server(statusCode: 501, message: "This bridge does not support releasing queue waits.")
+    }
+    func cancelPendingMessage(_ id: String, for key: CodexConversationKey) async throws -> CodexMessageReceipt {
+        throw NetworkService.NetworkError.server(statusCode: 501, message: "This bridge does not support removing pending messages.")
+    }
 }
 
 extension NetworkService: CodexConversationNetworking {
@@ -27,6 +38,21 @@ extension NetworkService: CodexConversationNetworking {
     func messageReceipt(_ id: String, for key: CodexConversationKey) async throws -> CodexMessageReceipt {
         guard UUID(uuidString: id) != nil else { throw NetworkError.badResponse }
         let request = try conversationRequest(path: "api/codex/messages/\(id)", key: key, query: targetQuery(key))
+        return try await readConversationJSON(request)
+    }
+
+    func releaseMessageWait(_ id: String, for key: CodexConversationKey) async throws -> CodexMessageReceipt {
+        try await changeQueueWait(id, action: "release-wait", key: key)
+    }
+
+    func cancelPendingMessage(_ id: String, for key: CodexConversationKey) async throws -> CodexMessageReceipt {
+        try await changeQueueWait(id, action: "cancel", key: key)
+    }
+
+    private func changeQueueWait(_ id: String, action: String, key: CodexConversationKey) async throws -> CodexMessageReceipt {
+        guard UUID(uuidString: id) != nil else { throw NetworkError.badResponse }
+        var request = try conversationRequest(path: "api/codex/messages/\(id)/\(action)", key: key, query: targetQuery(key))
+        request.httpMethod = "POST"
         return try await readConversationJSON(request)
     }
 
