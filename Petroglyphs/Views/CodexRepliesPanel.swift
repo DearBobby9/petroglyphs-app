@@ -318,6 +318,7 @@ private struct CodexMessageComposer: View {
     let onFocusChanged: (Bool) -> Void
     let modelSettings: CodexModelSettingsModel
     let onRefreshModels: () -> Void
+    @State private var previewAttachment: CodexDraftAttachment?
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var photos: [PhotosPickerItem] = []
@@ -337,7 +338,11 @@ private struct CodexMessageComposer: View {
                     HStack(spacing: 10) {
                         ForEach(session.draft.attachments) { attachment in
                             VStack(spacing: 2) {
-                                CodexDraftThumbnail(attachment: attachment, target: target, store: store)
+                                Button { previewAttachment = attachment } label: {
+                                    CodexDraftThumbnail(attachment: attachment, target: target, store: store)
+                                }
+                                .buttonStyle(.plain)
+                                .accessibilityLabel("Preview \(attachment.name)")
                                 Button {
                                     store.removeAttachment(attachment.id, for: target)
                                 } label: {
@@ -388,6 +393,11 @@ private struct CodexMessageComposer: View {
         .padding(12)
         }
         .background(Color.panelBackground)
+        .sheet(item: $previewAttachment) { attachment in
+            CodexImagePreview(items: session.draft.attachments.map { item in
+                CodexImagePreviewItem(id: item.id, name: item.name, load: { try await store.imageData(item.messageAttachment, for: target) })
+            }, selectedID: attachment.id, onRemove: { store.removeAttachment($0, for: target) })
+        }
         .photosPicker(isPresented: $showPhotos, selection: $photos,
                       maxSelectionCount: max(1, CodexAttachmentImporter.maximumCount - session.draft.attachments.count), matching: .images)
         .onChange(of: photos) { _, items in

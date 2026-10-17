@@ -21,7 +21,7 @@ struct CodexMessageRow: View {
                 if !message.attachments.isEmpty {
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: message.attachments.count > 1 ? 2 : 1), spacing: 8) {
                         ForEach(message.attachments) { attachment in
-                            CodexMessageImage(attachment: attachment, target: target, store: store)
+                            CodexMessageImage(attachment: attachment, siblings: message.attachments, target: target, store: store)
                         }
                     }
                 }
@@ -115,6 +115,7 @@ struct CodexMessageRow: View {
 
 struct CodexMessageImage: View {
     let attachment: CodexConversationAttachment
+    let siblings: [CodexConversationAttachment]
     let target: CodexChatTarget
     let store: CodexConversationStore
     @State private var image: UIImage?
@@ -162,16 +163,9 @@ struct CodexMessageImage: View {
             }
         }
         .sheet(isPresented: $showPreview) {
-            NavigationStack {
-                Group {
-                    if let image { Image(uiImage: image).resizable().scaledToFit().padding() }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color.panelBackground)
-                .navigationTitle(attachment.name)
-                .navigationBarTitleDisplayMode(.inline)
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showPreview = false } } }
-            }
+            CodexImagePreview(items: siblings.map { item in
+                CodexImagePreviewItem(id: item.id, name: item.name, load: { try await store.imageData(item, for: target) })
+            }, selectedID: attachment.id)
         }
     }
 
