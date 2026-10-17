@@ -3,13 +3,13 @@ import UIKit
 import ImageIO
 import UniformTypeIdentifiers
 
-struct CodexImportedImage {
+nonisolated struct CodexImportedImage {
     let data: Data
     let name: String
     let mimeType: String
 }
 
-enum CodexAttachmentImporter {
+nonisolated enum CodexAttachmentImporter {
     static let maximumCount = 4
     static let maximumImageBytes = 10 * 1_024 * 1_024
     static let maximumTotalBytes = 24 * 1_024 * 1_024

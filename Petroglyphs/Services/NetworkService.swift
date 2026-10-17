@@ -1,6 +1,8 @@
 import Foundation
 
 struct NetworkService {
+    nonisolated init() {}
+
     @discardableResult
     func submit(_ payload: SubmissionPayload, to serverURL: URL) async throws -> SubmissionResponse {
         let url = serverURL.appendingPathComponent("api/submit")

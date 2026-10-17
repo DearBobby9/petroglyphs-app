@@ -11,6 +11,9 @@ targets:
     sources:
       - CanvasBackgroundExportTests.swift
       - ../Petroglyphs/Models/CanvasBackground.swift
+      - ../Petroglyphs/Models/CanvasDocument.swift
+      - ../Petroglyphs/Models/CanvasDocumentReference.swift
+      - ../Petroglyphs/Services/CodexAttachmentImporter.swift
       - ../Petroglyphs/Models/CanvasAppearance.swift
       - ../Petroglyphs/Models/StrokeMetadata.swift
       - ../Petroglyphs/Extensions/PKDrawing+Export.swift

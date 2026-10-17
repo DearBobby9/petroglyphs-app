@@ -21,7 +21,12 @@ struct CanvasView: UIViewRepresentable {
         canvas.drawing = viewModel.drawing
         canvas.delegate = context.coordinator
 
+        #if targetEnvironment(simulator)
+        // Simulator input is a mouse or touch, so it cannot synthesize Pencil ink.
+        canvas.drawingPolicy = .anyInput
+        #else
         canvas.drawingPolicy = .pencilOnly
+        #endif
 
         // Tool picker
         let toolPicker = PKToolPicker()

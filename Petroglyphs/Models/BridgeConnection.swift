@@ -29,7 +29,7 @@ struct BridgeConnectionFailure: Equatable, Sendable {
     let generation: UUID
 }
 
-struct PairedBridge: Sendable {
+nonisolated struct PairedBridge: Sendable {
     let baseURL: URL
     let origin: URL
     let token: String

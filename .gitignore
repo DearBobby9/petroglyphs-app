@@ -22,3 +22,6 @@ Packages/
 
 # CocoaPods (if used later)
 Pods/
+
+# Generated XCTest projects (source manifests remain in version control)
+/Tests/*.xcodeproj/

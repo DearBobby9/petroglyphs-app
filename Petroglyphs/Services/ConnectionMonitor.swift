@@ -83,11 +83,11 @@ class ConnectionMonitor {
     private func beginMonitoring() {
         guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.checkHealth() }
+            Task { @MainActor [weak self] in self?.checkHealth() }
         }
         let monitor = NWPathMonitor()
         monitor.pathUpdateHandler = { [weak self] _ in
-            Task { @MainActor in
+            Task { @MainActor [weak self] in
                 guard let self, Date().timeIntervalSince(self.lastCheck) > 1 else { return }
                 self.checkHealth()
             }
