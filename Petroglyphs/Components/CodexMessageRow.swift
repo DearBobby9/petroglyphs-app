@@ -8,7 +8,7 @@ struct CodexMessageRow: View {
 
     private var isUser: Bool { message.role == "user" }
     private var local: CodexLocalMessage? { store.localMessage(message.clientMessageId, for: target) }
-    private var receipt: CodexMessageReceipt? { store.receipt(message.clientMessageId, for: target) }
+    private var receipt: CodexMessageReceipt? { store.receipt(message.clientMessageId ?? message.id, for: target) }
 
     var body: some View {
         VStack(alignment: isUser ? .trailing : .leading, spacing: 6) {
@@ -49,6 +49,11 @@ struct CodexMessageRow: View {
                 }
                 .font(.caption)
                 .foregroundStyle(message.state == .failed ? Color.rust : Color.charcoal.opacity(0.65))
+                if let selection = receipt?.selection ?? local?.selection {
+                    CodexModelEvidenceView(selection: selection, evidence: receipt?.modelEvidence,
+                                           verification: receipt?.modelVerification)
+                        .accessibilityIdentifier("chat.modelEvidence.\(message.clientMessageId ?? message.id)")
+                }
                 if let notice = local?.notice ?? receipt?.notice, !notice.isEmpty {
                     Text(notice).font(.caption).foregroundStyle(.secondary)
                 }

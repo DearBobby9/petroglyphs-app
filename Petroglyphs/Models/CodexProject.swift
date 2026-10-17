@@ -23,6 +23,7 @@ struct CodexCreateChatRequest: Codable, Equatable {
     let projectId: String
     let prompt: String
     let title: String?
+    var selection: CodexModelSelection? = nil
 }
 
 enum CodexChatCreationState: String, Codable {
@@ -39,4 +40,24 @@ struct CodexChatCreationReceipt: Codable, Equatable {
     let thread: CodexThread?
     let error: String?
     let notice: String?
+    var selection: CodexModelSelection? = nil
+    var modelEvidence: CodexModelEvidence? = nil
+    var modelVerification: String? = nil
+    var attemptId: String? = nil
+    var attemptNumber: Int? = nil
+    var canRetry: Bool? = nil
+    var failureCode: String? = nil
+    var creationMethod: String? = nil
+}
+
+struct CodexCreationRetryRequest: Codable, Equatable {
+    let hostId: String
+    let projectId: String
+    let attemptId: String
+}
+
+struct CodexNewChatDestination: Codable {
+    let serverURL: URL
+    let host: CodexHost
+    let project: CodexProject
 }

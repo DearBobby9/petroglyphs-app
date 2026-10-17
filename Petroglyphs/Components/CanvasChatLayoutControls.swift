@@ -16,31 +16,7 @@ struct CanvasChatLayoutMenu: View {
 
     var body: some View {
         Menu {
-            Section("Chat position") {
-                ForEach(CanvasChatSide.allCases, id: \.rawValue) { side in
-                    Button {
-                        controls.setSide(side)
-                    } label: {
-                        Label(side == .left ? "Chat on left" : "Chat on right",
-                              systemImage: controls.side == side ? "checkmark" : (side == .left ? "sidebar.left" : "sidebar.right"))
-                    }
-                    .accessibilityAddTraits(controls.side == side ? .isSelected : [])
-                    .accessibilityIdentifier("chat.layout.\(side.rawValue)")
-                }
-            }
-            Section("Chat width") {
-                Button("Narrower chat", systemImage: "minus") { controls.adjustWidth(-0.05) }
-                    .disabled(!controls.canResize || !controls.canNarrow)
-                    .accessibilityIdentifier("chat.layout.narrower")
-                Button("Wider chat", systemImage: "plus") { controls.adjustWidth(0.05) }
-                    .disabled(!controls.canResize || !controls.canWiden)
-                    .accessibilityIdentifier("chat.layout.wider")
-                Button("Reset width", systemImage: "arrow.counterclockwise") { controls.resetWidth() }
-                    .accessibilityIdentifier("chat.layout.reset")
-            }
-            if !controls.canResize {
-                Text("Position and width apply when the canvas and chat are side by side.")
-            }
+            CanvasChatLayoutMenuItems(controls: controls)
         } label: {
             Image(systemName: "rectangle.split.2x1")
                 .frame(width: 44, height: 44)
@@ -49,6 +25,36 @@ struct CanvasChatLayoutMenu: View {
         .accessibilityLabel("Chat layout")
         .accessibilityValue("\(controls.side == .left ? "Left" : "Right"), \(Int((controls.chatFraction * 100).rounded())) percent")
         .accessibilityIdentifier("chat.layoutMenu")
+    }
+}
+
+struct CanvasChatLayoutMenuItems: View {
+    let controls: CanvasChatLayoutControls
+
+    var body: some View {
+        Section("Chat position") {
+            ForEach(CanvasChatSide.allCases, id: \.rawValue) { side in
+                Button { controls.setSide(side) } label: {
+                    Label(side == .left ? "Chat on left" : "Chat on right",
+                          systemImage: controls.side == side ? "checkmark" : (side == .left ? "sidebar.left" : "sidebar.right"))
+                }
+                .accessibilityAddTraits(controls.side == side ? .isSelected : [])
+                .accessibilityIdentifier("chat.layout.\(side.rawValue)")
+            }
+        }
+        Section("Chat width") {
+            Button("Narrower chat", systemImage: "minus") { controls.adjustWidth(-0.05) }
+                .disabled(!controls.canResize || !controls.canNarrow)
+                .accessibilityIdentifier("chat.layout.narrower")
+            Button("Wider chat", systemImage: "plus") { controls.adjustWidth(0.05) }
+                .disabled(!controls.canResize || !controls.canWiden)
+                .accessibilityIdentifier("chat.layout.wider")
+            Button("Reset width", systemImage: "arrow.counterclockwise") { controls.resetWidth() }
+                .accessibilityIdentifier("chat.layout.reset")
+        }
+        if !controls.canResize {
+            Text("Position and width apply when the canvas and chat are side by side.")
+        }
     }
 }
 

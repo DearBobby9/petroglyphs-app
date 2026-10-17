@@ -100,6 +100,12 @@ final class CodexConversationStore {
         saveReportingFailure(session)
     }
 
+    func setDraftModelSelection(_ value: CodexDraftModelSelection?, for target: CodexChatTarget) {
+        let session = session(for: target)
+        session.draft.modelSelection = value
+        saveReportingFailure(session)
+    }
+
     func setReadingPosition(_ id: String?, atBottom: Bool, for target: CodexChatTarget) {
         let session = session(for: target)
         guard session.readingMessageID != id || session.isAtBottom != atBottom else { return }
@@ -195,6 +201,8 @@ final class CodexConversationStore {
             session.beforeCursor = page.beforeCursor
             session.hasLoadedOlder = true
             session.error = nil
+            for receipt in page.receipts { try apply(receipt, to: session) }
+            saveReportingFailure(session)
             try saveHistory(session)
         } catch {
             guard !Task.isCancelled else { return }
@@ -207,22 +215,24 @@ final class CodexConversationStore {
         }
     }
 
-    func sendDraft(to target: CodexChatTarget) async {
+    func sendDraft(to target: CodexChatTarget, modelSettings: CodexModelSettingsModel? = nil) async {
         let session = session(for: target)
         guard !session.draft.isEmpty, session.importingCount == 0 else { return }
         let draft = session.draft
         do {
-            let local = try enqueue(text: draft.text, attachments: draft.attachments, session: session, clearDraft: true)
+            let selection = try validatedModelSelection(for: session, settings: modelSettings, hasImages: !draft.attachments.isEmpty)
+            let local = try enqueue(text: draft.text, attachments: draft.attachments, selection: selection, session: session, clearDraft: true)
             await dispatch(local.id, session: session)
         } catch { session.draftError = error.localizedDescription }
     }
 
     // Canvas sends have their own immutable submission and leave the text draft intact.
-    func sendDrawing(_ pngData: Data, to target: CodexChatTarget) async throws -> Bool {
+    func sendDrawing(_ pngData: Data, to target: CodexChatTarget, modelSettings: CodexModelSettingsModel? = nil) async throws -> Bool {
         let session = session(for: target)
+        let selection = try validatedModelSelection(for: session, settings: modelSettings, hasImages: true)
         let image = CodexImportedImage(data: pngData, name: "Canvas.png", mimeType: "image/png")
         let attachment = try persistImage(image, for: session.key)
-        let local = try enqueue(text: "", attachments: [attachment], session: session, clearDraft: false)
+        let local = try enqueue(text: "", attachments: [attachment], selection: selection, session: session, clearDraft: false)
         await dispatch(local.id, session: session)
         let state = session.outgoing.first { $0.id == local.id }?.state
         return state == .pending || state == .queued || state == .running || state == .completed
@@ -261,13 +271,27 @@ final class CodexConversationStore {
         return data
     }
 
-    private func enqueue(text: String, attachments: [CodexDraftAttachment], session: CodexConversationSession, clearDraft: Bool) throws -> CodexLocalMessage {
+    private func validatedModelSelection(for session: CodexConversationSession, settings: CodexModelSettingsModel?, hasImages: Bool) throws -> CodexModelSelection? {
+        guard let draftSelection = session.draft.modelSelection else { return nil }
+        guard let selection = draftSelection.selection else { throw ConversationError.incompleteModelSelection }
+        if let settings {
+            guard settings.matches(from: session.key.serverURL, hostId: session.key.hostId, threadId: session.key.threadId) else {
+                throw ConversationError.invalidModelSelection("Load the model list for this chat before sending.")
+            }
+            if let reason = settings.validationMessage(for: draftSelection, hasImages: hasImages) {
+                throw ConversationError.invalidModelSelection(reason)
+            }
+        }
+        return selection
+    }
+
+    private func enqueue(text: String, attachments: [CodexDraftAttachment], selection: CodexModelSelection?, session: CodexConversationSession, clearDraft: Bool) throws -> CodexLocalMessage {
         guard text.utf16.count <= 20_000 else { throw ConversationError.textTooLong }
         let local = CodexLocalMessage(id: UUID().uuidString.lowercased(), text: text, attachments: attachments,
-                                      createdAt: Date(), state: .dispatching)
+                                      createdAt: Date(), state: .dispatching, selection: selection)
         let previousDraft = session.draft
         session.outgoing.append(local)
-        if clearDraft { session.draft = CodexMessageDraft() }
+        if clearDraft { session.draft = CodexMessageDraft(modelSelection: previousDraft.modelSelection) }
         do { try save(session) }
         catch {
             session.outgoing.removeAll { $0.id == local.id }
@@ -286,7 +310,7 @@ final class CodexConversationStore {
                 return CodexMessageRequest.Attachment(id: image.id, name: image.name, mimeType: image.mimeType, dataBase64: bytes.base64EncodedString())
             }
             let body = CodexMessageRequest(id: id, hostId: session.key.hostId, threadId: session.key.threadId,
-                                          text: local.text, attachments: attachments)
+                                          text: local.text, attachments: attachments, selection: local.selection)
             let receipt = try await network.sendMessage(body, for: session.key)
             guard receipt.id == id else { throw ConversationError.wrongDestination }
             try apply(receipt, to: session)
@@ -385,12 +409,15 @@ final class CodexConversationStore {
     }
 
     enum ConversationError: LocalizedError {
-        case wrongDestination, textTooLong, imageUnavailable
+        case wrongDestination, textTooLong, imageUnavailable, incompleteModelSelection
+        case invalidModelSelection(String)
         var errorDescription: String? {
             switch self {
             case .wrongDestination: "The server returned data for a different chat. No message was moved."
             case .textTooLong: "Keep each message under 20,000 characters."
             case .imageUnavailable: "This image is no longer available."
+            case .incompleteModelSelection: "Choose a model and reasoning effort before sending."
+            case .invalidModelSelection(let reason): reason
             }
         }
     }

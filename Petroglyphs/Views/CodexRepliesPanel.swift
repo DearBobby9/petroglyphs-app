@@ -5,9 +5,16 @@ import UniformTypeIdentifiers
 struct CodexRepliesPanel: View {
     let store: CodexConversationStore
     let target: CodexChatTarget?
+    let newChat: CodexProjectCreationModel?
+    let modelSettings: CodexModelSettingsModel
+    let isConnected: Bool
     var isFocused = false
     var canSend = true
     let onChooseChat: () -> Void
+    let onNewChat: () -> Void
+    let onCancelNewChat: () -> Void
+    let onCreated: (CodexThread, CodexProjectCreationModel) -> Void
+    let onRefreshModels: () -> Void
     let onAddCanvas: () -> Data?
     let onComposerFocusChanged: (Bool) -> Void
     var onExpand: (() -> Void)? = nil
@@ -20,17 +27,26 @@ struct CodexRepliesPanel: View {
         VStack(spacing: 0) {
             header
             Divider()
-            if let target, let session {
+            if let newChat {
+                CodexNewChatPanel(model: newChat, modelSettings: modelSettings, isConnected: isConnected,
+                                  onCancel: onCancelNewChat, onChooseDestination: onNewChat,
+                                  onRefreshModels: onRefreshModels, onFocusChanged: onComposerFocusChanged,
+                                  onCreated: { onCreated($0, newChat) })
+                    .id("\(newChat.serverURL.absoluteString):\(newChat.host.id):\(newChat.project.id)")
+            } else if let target, let session {
                 chatContents(target: target, session: session)
                     .id(session.key)
             } else {
                 VStack(spacing: 12) {
                     Image(systemName: "bubble.left.and.bubble.right").font(.largeTitle)
-                    Text("Choose a chat").font(.headline)
+                    Text("Start a conversation").font(.headline)
                     Text("Continue a conversation with text, pictures, and your canvas.")
                         .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center)
-                    Button("Choose a Codex chat", action: onChooseChat)
+                    Button("New chat", systemImage: "square.and.pencil", action: onNewChat)
                         .buttonStyle(.borderedProminent).tint(Color.ochre).foregroundStyle(Color.onAccent)
+                        .frame(minHeight: 44)
+                        .accessibilityIdentifier("chat.newChat")
+                    Button("Choose an existing chat", action: onChooseChat)
                         .frame(minHeight: 44)
                         .accessibilityIdentifier("chat.destination")
                 }
@@ -50,13 +66,26 @@ struct CodexRepliesPanel: View {
         HStack(spacing: 0) {
             HStack(spacing: 8) {
                 Text("Chat").font(.headline).lineLimit(1)
-                if session?.isBusy == true { ProgressView().controlSize(.small) }
+                if newChat.map({ $0.isBusy || $0.isObservingCreation }) ?? (session?.isBusy == true) {
+                    ProgressView().controlSize(.small)
+                }
             }
             .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
-            if let layoutControls {
-                CanvasChatLayoutMenu(controls: layoutControls)
+            Menu {
+                Button {
+                    if let newChat { Task { await newChat.checkStatus() } }
+                    else if let target { Task { await store.refresh(for: target) } }
+                    onRefreshModels()
+                } label: { Label(newChat == nil ? "Refresh conversation" : "Refresh creation status", systemImage: "arrow.clockwise") }
+                .disabled((target == nil && newChat == nil) || (newChat?.isBusy ?? (session?.isRefreshing == true)))
+                .accessibilityIdentifier("codex.refreshReplies")
+                if let layoutControls { CanvasChatLayoutMenuItems(controls: layoutControls) }
+            } label: {
+                Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle())
             }
+            .accessibilityLabel("Chat options")
+            .accessibilityIdentifier("chat.moreMenu")
             if let onExpand {
                 Button(action: onExpand) {
                     Image(systemName: isFocused ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
@@ -66,16 +95,6 @@ struct CodexRepliesPanel: View {
                 .accessibilityLabel(isFocused ? "Return to canvas" : "Expand chat")
                 .accessibilityIdentifier("chat.expand")
             }
-            Button {
-                if let target { Task { await store.refresh(for: target) } }
-            } label: {
-                Image(systemName: "arrow.clockwise").frame(width: 44, height: 44).contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .disabled(target == nil || session?.isRefreshing == true)
-            .accessibilityLabel("Refresh conversation")
-            .accessibilityHint("Loads this chat without sending another message.")
-            .accessibilityIdentifier("codex.refreshReplies")
         }
         .padding(.leading, 14)
         .padding(.trailing, reservesTopTrailingControl ? 68 : 12)
@@ -84,24 +103,33 @@ struct CodexRepliesPanel: View {
 
     private func chatContents(target: CodexChatTarget, session: CodexConversationSession) -> some View {
         VStack(spacing: 0) {
-            Button(action: onChooseChat) {
-                HStack(spacing: 10) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(target.thread.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
-                        Label(target.host.name, systemImage: target.host.kind == "remote" ? "network" : "desktopcomputer")
-                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+            HStack(spacing: 0) {
+                Button(action: onChooseChat) {
+                    HStack(spacing: 10) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(target.thread.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
+                            Label([target.host.name, target.projectName].compactMap { $0 }.joined(separator: " · "), systemImage: target.host.kind == "remote" ? "network" : "desktopcomputer")
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.down").font(.caption.weight(.semibold))
                     }
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.down").font(.caption.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .frame(minHeight: 52)
+                    .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 8)
-                .frame(minHeight: 52)
-                .contentShape(Rectangle())
+                .buttonStyle(.plain)
+                .accessibilityLabel("Change chat: \(target.thread.displayTitle), \(target.host.name)")
+                .accessibilityIdentifier("chat.destination")
+                Button(action: onNewChat) {
+                    Image(systemName: "square.and.pencil").frame(width: 44, height: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("New chat")
+                .accessibilityIdentifier("chat.newChat")
+                .padding(.trailing, 8)
             }
-            .buttonStyle(.plain)
-            .accessibilityLabel("Change chat: \(target.thread.displayTitle), \(target.host.name)")
-            .accessibilityIdentifier("chat.destination")
 
             if let error = session.error {
                 HStack(alignment: .top, spacing: 8) {
@@ -119,7 +147,8 @@ struct CodexRepliesPanel: View {
             Divider()
             CodexMessageComposer(store: store, target: target, session: session,
                                  canSend: canSend, onAddCanvas: onAddCanvas,
-                                 onFocusChanged: onComposerFocusChanged)
+                                 onFocusChanged: onComposerFocusChanged,
+                                 modelSettings: modelSettings, onRefreshModels: onRefreshModels)
         }
     }
 }
@@ -282,6 +311,8 @@ private struct CodexMessageComposer: View {
     let canSend: Bool
     let onAddCanvas: () -> Data?
     let onFocusChanged: (Bool) -> Void
+    let modelSettings: CodexModelSettingsModel
+    let onRefreshModels: () -> Void
     @State private var showPhotos = false
     @State private var showFiles = false
     @State private var photos: [PhotosPickerItem] = []
@@ -289,6 +320,8 @@ private struct CodexMessageComposer: View {
 
     private var canSubmit: Bool {
         canSend && !session.draft.isEmpty && session.importingCount == 0 && session.draft.text.utf16.count <= 20_000
+            && (session.draft.modelSelection == nil || modelSettings.matches(from: target.serverURL, hostId: target.host.id, threadId: target.thread.id))
+            && modelSettings.validationMessage(for: session.draft.modelSelection, hasImages: !session.draft.attachments.isEmpty) == nil
     }
 
     var body: some View {
@@ -325,34 +358,14 @@ private struct CodexMessageComposer: View {
             if session.importingCount > 0 {
                 ProgressView("Adding image…").font(.caption)
             }
-            HStack(alignment: .bottom, spacing: 6) {
-                attachmentMenu
-                ZStack(alignment: .topLeading) {
-                    if session.draft.text.isEmpty {
-                        Text("Message Codex…").foregroundStyle(.secondary).padding(.top, 10).padding(.leading, 3)
-                            .allowsHitTesting(false).accessibilityHidden(true)
-                    }
-                    CodexComposerInput(text: Binding(get: { session.draft.text }, set: { store.setDraftText($0, for: target) }),
-                                       enabled: true, onFocusChanged: onFocusChanged,
-                                       onPasteImages: importProviders, onSubmit: send)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Button(action: send) {
-                    Image(systemName: "arrow.up")
-                        .font(.body.weight(.semibold))
-                        .frame(width: 44, height: 44).contentShape(Rectangle())
-                        .foregroundStyle(canSubmit ? Color.onAccent : Color.charcoal.opacity(0.35))
-                        .background(canSubmit ? Color.ochre : Color.sandstone.opacity(0.4), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .disabled(!canSubmit)
-                .accessibilityLabel(session.isBusy ? "Queue message" : "Send message")
-                .accessibilityHint(session.isBusy ? "Sends to this chat after its current turn finishes." : "Sends text and attached images to the selected chat.")
-                .accessibilityIdentifier("chat.send")
-            }
-            .padding(6)
-            .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 18))
-            .overlay(RoundedRectangle(cornerRadius: 18).stroke(isDropTarget ? Color.ochre : Color.charcoal.opacity(0.12), lineWidth: isDropTarget ? 2 : 1))
+            CodexComposerCard(text: Binding(get: { session.draft.text }, set: { store.setDraftText($0, for: target) }),
+                              canSubmit: canSubmit, isDropTarget: isDropTarget, hasImages: !session.draft.attachments.isEmpty,
+                              sendLabel: session.isBusy ? "Queue message" : "Send message",
+                              sendHint: session.isBusy ? "Sends to this chat after its current turn finishes." : "Sends text and attached images to the selected chat.",
+                              modelSettings: modelSettings, modelSelection: session.draft.modelSelection,
+                              onModelSelectionChange: { store.setDraftModelSelection($0, for: target) },
+                              onRefreshModels: onRefreshModels, onFocusChanged: onFocusChanged,
+                              onPasteImages: importProviders, onSubmit: send) { attachmentMenu }
             .onDrop(of: [UTType.image], isTargeted: $isDropTarget) { providers in
                 importProviders(providers)
                 return !providers.isEmpty
@@ -446,7 +459,7 @@ private struct CodexMessageComposer: View {
     private func send() {
         guard canSubmit else { return }
         store.setReadingPosition(nil, atBottom: true, for: target)
-        Task { await store.sendDraft(to: target) }
+        Task { await store.sendDraft(to: target, modelSettings: modelSettings) }
     }
 }
 

@@ -73,6 +73,28 @@ struct CodexMessageReceipt: Codable, Identifiable, Equatable {
     let message: CodexConversationMessage
     let error: String?
     let notice: String?
+    let selection: CodexModelSelection?
+    let modelEvidence: CodexModelEvidence?
+    let modelVerification: String?
+
+    init(id: String, hostId: String, threadId: String, createdAt: Date, updatedAt: Date,
+         state: CodexMessageState, turnId: String?, message: CodexConversationMessage,
+         error: String?, notice: String?, selection: CodexModelSelection? = nil,
+         modelEvidence: CodexModelEvidence? = nil, modelVerification: String? = nil) {
+        self.id = id
+        self.hostId = hostId
+        self.threadId = threadId
+        self.createdAt = createdAt
+        self.updatedAt = updatedAt
+        self.state = state
+        self.turnId = turnId
+        self.message = message
+        self.error = error
+        self.notice = notice
+        self.selection = selection
+        self.modelEvidence = modelEvidence
+        self.modelVerification = modelVerification
+    }
 }
 
 struct CodexConversationPage: Decodable {
@@ -91,6 +113,16 @@ struct CodexMessageRequest: Encodable {
     let threadId: String
     let text: String
     let attachments: [Attachment]
+    let selection: CodexModelSelection?
+
+    init(id: String, hostId: String, threadId: String, text: String, attachments: [Attachment], selection: CodexModelSelection? = nil) {
+        self.id = id
+        self.hostId = hostId
+        self.threadId = threadId
+        self.text = text
+        self.attachments = attachments
+        self.selection = selection
+    }
 
     struct Attachment: Encodable {
         let id: String
@@ -117,6 +149,7 @@ struct CodexDraftAttachment: Codable, Identifiable, Equatable {
 struct CodexMessageDraft: Codable, Equatable {
     var text = ""
     var attachments: [CodexDraftAttachment] = []
+    var modelSelection: CodexDraftModelSelection? = nil
     var isEmpty: Bool { text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && attachments.isEmpty }
 }
 
@@ -130,6 +163,22 @@ struct CodexLocalMessage: Codable, Identifiable {
     var notice: String?
     var canRetry = false
     var appearedInHistory = false
+    let selection: CodexModelSelection?
+
+    init(id: String, text: String, attachments: [CodexDraftAttachment], createdAt: Date,
+         state: CodexMessageState, error: String? = nil, notice: String? = nil,
+         canRetry: Bool = false, appearedInHistory: Bool = false, selection: CodexModelSelection? = nil) {
+        self.id = id
+        self.text = text
+        self.attachments = attachments
+        self.createdAt = createdAt
+        self.state = state
+        self.error = error
+        self.notice = notice
+        self.canRetry = canRetry
+        self.appearedInHistory = appearedInHistory
+        self.selection = selection
+    }
 
     var message: CodexConversationMessage {
         CodexConversationMessage(id: id, turnId: nil, clientMessageId: id, role: "user", text: text,

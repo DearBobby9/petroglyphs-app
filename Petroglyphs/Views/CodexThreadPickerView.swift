@@ -3,6 +3,9 @@ import SwiftUI
 struct CodexThreadPickerView: View {
     let serverURL: URL
     @Binding var selection: CodexChatTarget?
+    let creationOnly: Bool
+    let onChoose: () -> Void
+    let onNewChat: (CodexHost, CodexProject) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var model = CodexThreadListModel()
     @State private var projects = CodexProjectListModel()
@@ -17,6 +20,18 @@ struct CodexThreadPickerView: View {
     @State private var hostError: String?
     @State private var hostsReloadID = 0
     @State private var hostsVersion = 0
+
+    init(serverURL: URL, selection: Binding<CodexChatTarget?>, creationOnly: Bool = false,
+         initialHostID: String? = nil, onChoose: @escaping () -> Void = {},
+         onNewChat: @escaping (CodexHost, CodexProject) -> Void) {
+        self.serverURL = serverURL
+        _selection = selection
+        self.creationOnly = creationOnly
+        self.onChoose = onChoose
+        self.onNewChat = onNewChat
+        _scope = State(initialValue: creationOnly ? .projects : .chats)
+        _selectedHostID = State(initialValue: initialHostID)
+    }
 
     private enum Scope: String, CaseIterable {
         case chats = "All chats"
@@ -43,13 +58,13 @@ struct CodexThreadPickerView: View {
         NavigationStack {
             VStack(spacing: 0) {
                 hostPicker
-                scopePicker
+                if !creationOnly { scopePicker }
                 searchField
                 content
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .background(Color.limestone)
-            .navigationTitle("Choose a Codex chat")
+            .navigationTitle(creationOnly ? "New chat location" : "Choose a Codex chat")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -78,9 +93,9 @@ struct CodexThreadPickerView: View {
             .onChange(of: scope) { _, _ in searchText = "" }
             .navigationDestination(item: $selectedProject) { project in
                 if let host = selectedHost {
-                    CodexProjectChatsView(serverURL: serverURL, host: host, project: project, selection: selection) { thread in
-                        choose(thread, host: host)
-                    }
+                    CodexProjectChatsView(serverURL: serverURL, host: host, project: project, selection: selection,
+                                          onChoose: { choose($0, host: host, project: project) },
+                                          onNewChat: { beginDraft(project, host: host) })
                 }
             }
             .onDisappear {
@@ -88,6 +103,7 @@ struct CodexThreadPickerView: View {
             }
         }
         .tint(Color.burntOchre)
+        .accessibilityIdentifier(creationOnly ? "codex.newChatProjectPicker" : "codex.threadPicker")
     }
 
     private var hostPicker: some View {
@@ -262,7 +278,10 @@ struct CodexThreadPickerView: View {
             List {
                 Section {
                     ForEach(projects.matching(searchText)) { project in
-                        Button { selectedProject = project } label: {
+                        Button {
+                            if creationOnly, let host = selectedHost { beginDraft(project, host: host) }
+                            else { selectedProject = project }
+                        } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: "folder")
                                     .foregroundStyle(Color.burntOchre)
@@ -291,13 +310,15 @@ struct CodexThreadPickerView: View {
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .disabled(creationOnly && !project.canCreate)
                         .accessibilityIdentifier("codex.project.\(project.id)")
+                        .accessibilityAddTraits(selection?.projectId == project.id && selection?.host.id == selectedHostID ? .isSelected : [])
                         .accessibilityElement(children: .combine)
                     }
                 } header: {
                     Text("Projects on \(selectedHost?.name ?? "selected location")")
                 } footer: {
-                    Text("Open a project to choose a chat or create a new one.")
+                    Text(creationOnly ? "Choose the project for your new chat. The first message creates it." : "Open a project to choose a chat or create a new one.")
                 }
             }
             .listStyle(.insetGrouped)
@@ -306,8 +327,16 @@ struct CodexThreadPickerView: View {
         }
     }
 
-    private func choose(_ thread: CodexThread, host: CodexHost) {
-        selection = CodexChatTarget(thread: thread, serverURL: serverURL, host: host)
+    private func choose(_ thread: CodexThread, host: CodexHost, project: CodexProject? = nil) {
+        selection = CodexChatTarget(thread: thread, serverURL: serverURL, host: host,
+                                    projectId: project?.id, projectName: project?.displayName)
+        onChoose()
+        dismiss()
+    }
+
+    private func beginDraft(_ project: CodexProject, host: CodexHost) {
+        guard project.canCreate, host.canSelect else { return }
+        onNewChat(host, project)
         dismiss()
     }
 
@@ -383,7 +412,7 @@ struct CodexThreadPickerView: View {
                     reason: "This chat location is no longer available. Reconnect it in Codex, then refresh."
                 )
                 if !hosts.contains(where: { $0.id == host.id }) { hosts.append(host) }
-                self.selection = CodexChatTarget(thread: selection.thread, serverURL: selection.serverURL, host: host)
+                self.selection = CodexChatTarget(thread: selection.thread, serverURL: selection.serverURL, host: host, projectId: selection.projectId, projectName: selection.projectName)
             }
             hostsVersion += 1
             if selectedHostID == nil {
@@ -413,11 +442,11 @@ private struct CodexProjectChatsView: View {
     let project: CodexProject
     let selection: CodexChatTarget?
     let onChoose: (CodexThread) -> Void
+    let onNewChat: () -> Void
     @State private var model = CodexThreadListModel()
     @State private var search = ""
     @State private var reloadID = 0
     @State private var paginationTask: Task<Void, Never>?
-    @State private var creationProject: CodexProject?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -431,7 +460,7 @@ private struct CodexProjectChatsView: View {
                     .lineLimit(3)
                     .truncationMode(.middle)
                     .textSelection(.enabled)
-                Button { creationProject = project } label: {
+                Button(action: onNewChat) {
                     Label("New chat in this project", systemImage: "square.and.pencil")
                         .frame(maxWidth: .infinity, minHeight: 44)
                         .contentShape(Rectangle())
@@ -484,9 +513,6 @@ private struct CodexProjectChatsView: View {
             await model.load(from: serverURL, hostId: host.id, projectId: project.id, search: search.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         .onDisappear { paginationTask?.cancel() }
-        .sheet(item: $creationProject) { project in
-            CodexCreateChatView(project: project, host: host, serverURL: serverURL, onCreated: onChoose)
-        }
     }
 
     @ViewBuilder
@@ -588,142 +614,5 @@ private struct CodexPickerThreadRow: View {
         .frame(minHeight: 44)
         .contentShape(Rectangle())
         .accessibilityElement(children: .combine)
-    }
-}
-
-private struct CodexCreateChatView: View {
-    let onCreated: (CodexThread) -> Void
-    @Environment(\.dismiss) private var dismiss
-    @State private var model: CodexProjectCreationModel
-
-    init(project: CodexProject, host: CodexHost, serverURL: URL, onCreated: @escaping (CodexThread) -> Void) {
-        self.onCreated = onCreated
-        _model = State(initialValue: CodexProjectCreationModel(project: project, host: host, serverURL: serverURL))
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Project") {
-                    Label(model.project.displayName, systemImage: "folder")
-                        .font(.headline)
-                    LabeledContent("Location", value: model.host.name)
-                    Text(model.project.path)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                }
-                Section {
-                    TextField("Name (optional)", text: $model.title)
-                        .textInputAutocapitalization(.sentences)
-                        .disabled(model.request != nil)
-                        .accessibilityLabel("New chat name, optional")
-                        .accessibilityIdentifier("codex.chatName")
-                    if model.title.utf16.count > 120 {
-                        Text("Use 120 characters or fewer.").foregroundStyle(Color.rust)
-                    }
-                } header: {
-                    Text("Chat name")
-                }
-                Section {
-                    ZStack(alignment: .topLeading) {
-                        if model.prompt.isEmpty {
-                            Text("Write the first message to start this chat.")
-                                .foregroundStyle(.tertiary)
-                                .padding(.top, 8)
-                                .padding(.leading, 5)
-                                .allowsHitTesting(false)
-                                .accessibilityHidden(true)
-                        }
-                        TextEditor(text: $model.prompt)
-                            .frame(minHeight: 140)
-                            .scrollContentBackground(.hidden)
-                            .disabled(model.request != nil)
-                            .accessibilityLabel("First message")
-                            .accessibilityIdentifier("codex.firstMessage")
-                    }
-                    if model.prompt.utf16.count > 20_000 {
-                        Text("Use 20,000 characters or fewer.").foregroundStyle(Color.rust)
-                    }
-                } header: {
-                    Text("Message")
-                } footer: {
-                    Text("Start chat creates a conversation in this project and sends this message. You can add drawings and images afterward.")
-                }
-                if model.request == nil {
-                    Section {
-                        Button { Task { await model.submit() } } label: {
-                            Label("Start chat", systemImage: "arrow.up.message")
-                                .frame(maxWidth: .infinity, minHeight: 44)
-                        }
-                        .disabled(!model.canSubmit)
-                        .accessibilityIdentifier("codex.createChat")
-                    }
-                }
-                if let status = model.status {
-                    Section {
-                        HStack(spacing: 12) {
-                            if model.isBusy { ProgressView() }
-                            Text(status)
-                        }
-                        .accessibilityIdentifier("codex.creationStatus")
-                        if let notice = model.receipt?.notice { Text(notice).font(.footnote).foregroundStyle(.secondary) }
-                        if model.createdThread == nil {
-                            Button("Check status") { Task { await model.checkStatus() } }
-                                .frame(minHeight: 44)
-                                .disabled(model.isBusy)
-                                .accessibilityIdentifier("codex.checkCreation")
-                        }
-                        if model.canRetryOriginal {
-                            Button("Retry this request") { Task { await model.retryOriginal() } }
-                                .frame(minHeight: 44)
-                                .accessibilityIdentifier("codex.retryCreation")
-                        }
-                        if model.canEditFailedAttempt {
-                            Button("Edit and try again") { model.editFailedAttempt() }
-                                .frame(minHeight: 44)
-                                .accessibilityIdentifier("codex.editFailedCreation")
-                        }
-                    }
-                }
-                if let error = model.storageError ?? model.error {
-                    Section {
-                        Text(error).foregroundStyle(Color.rust)
-                            .accessibilityIdentifier("codex.creationError")
-                    }
-                }
-            }
-            .scrollContentBackground(.hidden)
-            .background(Color.limestone)
-            .scrollDismissesKeyboard(.interactively)
-            .navigationTitle("New chat")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(model.request == nil ? "Cancel" : "Done") { dismiss() }
-                        .disabled(model.isSubmitting)
-                }
-            }
-            .interactiveDismissDisabled(model.isSubmitting)
-            .task {
-                if model.request != nil && model.createdThread == nil { await model.checkStatus() }
-            }
-            .task(id: model.receipt?.state) {
-                guard model.receipt?.state.isActive == true else { return }
-                // Poll only a recorded request. A timeout never initiates another POST.
-                for _ in 0..<15 {
-                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
-                    guard model.receipt?.state.isActive == true, !Task.isCancelled else { return }
-                    await model.checkStatus()
-                }
-            }
-            .onChange(of: model.createdThread, initial: true) { _, thread in
-                guard let thread else { return }
-                model.acknowledgeCompletion()
-                onCreated(thread)
-                dismiss()
-            }
-        }
-        .tint(Color.burntOchre)
     }
 }

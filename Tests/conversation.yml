@@ -10,7 +10,9 @@ targets:
     platform: iOS
     sources:
       - CodexConversationStoreTests.swift
+      - CodexModelSettingsTests.swift
       - ../Petroglyphs/Models/CodexConversation.swift
+      - ../Petroglyphs/Models/CodexModelSettings.swift
       - ../Petroglyphs/Models/CodexHost.swift
       - ../Petroglyphs/Models/CodexThread.swift
       - ../Petroglyphs/Models/CodexReply.swift
@@ -22,8 +24,10 @@ targets:
       - ../Petroglyphs/Services/BridgeTransport.swift
       - ../Petroglyphs/Services/NetworkService.swift
       - ../Petroglyphs/Services/NetworkService+Conversation.swift
+      - ../Petroglyphs/Services/NetworkService+ModelSettings.swift
       - ../Petroglyphs/Services/CodexAttachmentImporter.swift
       - ../Petroglyphs/Services/CodexConversationStore.swift
+      - ../Petroglyphs/ViewModels/CodexModelSettingsModel.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bobbyjia.petroglyphs.conversationtests

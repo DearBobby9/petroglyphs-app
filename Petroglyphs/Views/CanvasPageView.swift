@@ -22,17 +22,40 @@ struct CanvasPageView: View {
     @State private var showBackgroundPicker = false
     @State private var composerFocused = false
     @State private var resizingChatExtent: CGFloat?
+    @State private var modelSettings = CodexModelSettingsModel()
+    @State private var modelSettingsRefreshID = 0
     private let network = NetworkService()
     @State private var offlineQueue = OfflineQueue()
 
     private struct PickerServer: Identifiable {
         let url: URL
-        var id: String { url.absoluteString }
+        var creationOnly = false
+        var id: String { "\(url.absoluteString):\(creationOnly)" }
     }
 
     private struct ConversationRequest: Equatable {
         let target: CodexChatTarget?
         let isActive: Bool
+    }
+
+    private struct ModelSettingsRequest: Equatable {
+        let serverURL: URL?
+        let hostId: String?
+        let threadId: String?
+        let isActive: Bool
+        let refreshID: Int
+    }
+
+    private var newChat: CodexProjectCreationModel? {
+        guard appState.newCodexChat?.serverURL == connectionMonitor.serverURL else { return nil }
+        return appState.newCodexChat
+    }
+
+    private var modelSettingsRequest: ModelSettingsRequest {
+        ModelSettingsRequest(serverURL: connectionMonitor.serverURL,
+                             hostId: newChat?.host.id ?? selectedTarget?.host.id,
+                             threadId: newChat == nil ? selectedTarget?.thread.id : nil,
+                             isActive: scenePhase == .active, refreshID: modelSettingsRefreshID)
     }
 
     private var selectedTarget: CodexChatTarget? {
@@ -48,14 +71,20 @@ struct CanvasPageView: View {
     }
 
     private var hasReplyPanel: Bool {
-        connectionMonitor.requiresCodexThread == true || selectedTarget != nil
+        connectionMonitor.requiresCodexThread == true || selectedTarget != nil || newChat != nil
     }
 
     private var canSend: Bool {
         guard !vm.isCasting, !vm.drawing.strokes.isEmpty,
               connectionMonitor.serverURL != nil,
               let requiresThread = connectionMonitor.requiresCodexThread else { return false }
-        return !requiresThread || (selectedTarget?.host.canSelect == true && connectionMonitor.isConnected)
+        if requiresThread {
+            guard newChat == nil, let target = selectedTarget, target.host.canSelect, connectionMonitor.isConnected else { return false }
+            if appState.codexConversation.session(for: target).draft.modelSelection != nil,
+               !modelSettings.matches(from: target.serverURL, hostId: target.host.id, threadId: target.thread.id) { return false }
+            return modelSettings.validationMessage(for: appState.codexConversation.session(for: target).draft.modelSelection, hasImages: true) == nil
+        }
+        return true
     }
 
     private var connectionMessage: String? {
@@ -66,12 +95,15 @@ struct CanvasPageView: View {
         if requiresThread && !connectionMonitor.isConnected {
             return "Reconnect to your Mac to send. Your drawing stays here."
         }
+        if requiresThread && newChat != nil { return "Start this chat with a text message, then send your canvas." }
         if requiresThread && selectedTarget == nil {
             return "Choose a Codex chat before sending."
         }
         if requiresThread, let reason = selectedTarget?.host.unavailabilityReason {
             return reason
         }
+        if requiresThread, let target = selectedTarget,
+           let reason = modelSettings.validationMessage(for: appState.codexConversation.session(for: target).draft.modelSelection, hasImages: true) { return reason }
         return nil
     }
 
@@ -120,9 +152,19 @@ struct CanvasPageView: View {
                             CodexRepliesPanel(
                                 store: appState.codexConversation,
                                 target: selectedTarget,
+                                newChat: newChat,
+                                modelSettings: modelSettings,
+                                isConnected: connectionMonitor.isConnected,
                                 isFocused: chatFillsPage,
                                 canSend: connectionMonitor.isConnected && selectedTarget?.host.canSelect == true,
                                 onChooseChat: chooseChat,
+                                onNewChat: chooseNewChatProject,
+                                onCancelNewChat: { dismissComposer(); appState.newCodexChat = nil },
+                                onCreated: { thread, draft in
+                                    dismissComposer()
+                                    appState.finishNewChat(thread, from: draft)
+                                },
+                                onRefreshModels: { modelSettingsRefreshID += 1 },
                                 onAddCanvas: canvasSnapshot,
                                 onComposerFocusChanged: { focused in
                                     withAnimation(layoutAnimation()) { composerFocused = focused }
@@ -164,9 +206,17 @@ struct CanvasPageView: View {
                 showClearHint = true
             }
         }
-        .task(id: ConversationRequest(target: selectedTarget, isActive: scenePhase == .active)) {
-            guard scenePhase == .active, let target = selectedTarget else { return }
+        .task(id: ConversationRequest(target: newChat == nil ? selectedTarget : nil, isActive: scenePhase == .active)) {
+            guard scenePhase == .active, newChat == nil, let target = selectedTarget else { return }
             await appState.codexConversation.observe(target: target)
+        }
+        .task(id: modelSettingsRequest) {
+            let request = modelSettingsRequest
+            guard request.isActive, let serverURL = request.serverURL, let hostId = request.hostId else { return }
+            await modelSettings.observe(from: serverURL, hostId: hostId, threadId: request.threadId)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
+            modelSettingsRefreshID += 1
         }
         .onChange(of: repliesExpanded) { _, expanded in
             if !expanded {
@@ -186,10 +236,17 @@ struct CanvasPageView: View {
             if appState.selectedCodexChat?.serverURL != connectionMonitor.serverURL {
                 appState.selectedCodexChat = nil
             }
+            if appState.newCodexChat?.serverURL != connectionMonitor.serverURL { appState.newCodexChat = nil }
             pickerServer = nil
         }
         .sheet(item: $pickerServer) { server in
-            CodexThreadPickerView(serverURL: server.url, selection: $appState.selectedCodexChat)
+            CodexThreadPickerView(serverURL: server.url, selection: $appState.selectedCodexChat,
+                                  creationOnly: server.creationOnly,
+                                  initialHostID: newChat?.host.id ?? selectedTarget?.host.id,
+                                  onChoose: { appState.newCodexChat = nil },
+                                  onNewChat: { host, project in
+                                      appState.startNewChat(project: project, host: host, serverURL: server.url)
+                                  })
                 .presentationDetents([.large])
         }
         .alert("Could not send drawing", isPresented: Binding(
@@ -473,7 +530,7 @@ struct CanvasPageView: View {
             Task {
                 defer { vm.isCasting = false }
                 do {
-                    let confirmed = try await appState.codexConversation.sendDrawing(data, to: target)
+                    let confirmed = try await appState.codexConversation.sendDrawing(data, to: target, modelSettings: modelSettings)
                     vm.showCastSuccess = confirmed
                 } catch {
                     vm.castError = error.localizedDescription
@@ -497,6 +554,11 @@ struct CanvasPageView: View {
     private func chooseChat() {
         dismissComposer()
         if let url = connectionMonitor.serverURL { pickerServer = PickerServer(url: url) }
+    }
+
+    private func chooseNewChatProject() {
+        dismissComposer()
+        if let url = connectionMonitor.serverURL { pickerServer = PickerServer(url: url, creationOnly: true) }
     }
 
     private func canvasSnapshot() -> Data? {
