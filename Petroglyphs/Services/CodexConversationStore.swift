@@ -28,6 +28,8 @@ final class CodexConversationSession {
     var importingCount = 0
     var isAtBottom = true
     var readingMessageID: String?
+    var readingBlockID: String?
+    var readingBlockFraction: Double?
 
     init(key: CodexConversationKey) { self.key = key }
 
@@ -83,6 +85,8 @@ final class CodexConversationStore {
                     return item
                 }
                 session.readingMessageID = stored.readingMessageID
+                session.readingBlockID = stored.readingBlockID
+                session.readingBlockFraction = stored.readingBlockFraction
                 session.isAtBottom = stored.isAtBottom
             }
         } catch {
@@ -122,10 +126,14 @@ final class CodexConversationStore {
         saveReportingFailure(session)
     }
 
-    func setReadingPosition(_ id: String?, atBottom: Bool, for target: CodexChatTarget) {
+    func setReadingPosition(_ id: String?, atBottom: Bool, for target: CodexChatTarget, blockID: String? = nil, blockFraction: Double? = nil) {
         let session = session(for: target)
-        guard session.readingMessageID != id || session.isAtBottom != atBottom else { return }
+        let fraction = blockFraction.flatMap { $0.isFinite ? min(1, max(0, $0)) : nil }
+        guard session.readingMessageID != id || session.isAtBottom != atBottom
+                || session.readingBlockID != blockID || session.readingBlockFraction != fraction else { return }
         session.readingMessageID = id
+        session.readingBlockID = atBottom ? nil : blockID
+        session.readingBlockFraction = atBottom ? nil : fraction
         session.isAtBottom = atBottom
         saveReportingFailure(session)
     }
@@ -465,7 +473,8 @@ final class CodexConversationStore {
         let directory = directory(for: session.key)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let saved = SavedConversation(version: 2, draft: session.draft, outgoing: session.outgoing,
-                                      readingMessageID: session.readingMessageID, isAtBottom: session.isAtBottom)
+                                      readingMessageID: session.readingMessageID, isAtBottom: session.isAtBottom,
+                                      readingBlockID: session.readingBlockID, readingBlockFraction: session.readingBlockFraction)
         try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("state.json"), options: .atomic)
     }
 
@@ -499,6 +508,8 @@ final class CodexConversationStore {
         let outgoing: [CodexLocalMessage]
         let readingMessageID: String?
         let isAtBottom: Bool
+        var readingBlockID: String? = nil
+        var readingBlockFraction: Double? = nil
     }
 
     enum ConversationError: LocalizedError {

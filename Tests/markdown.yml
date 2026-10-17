@@ -10,6 +10,8 @@ targets:
     platform: macOS
     sources:
       - CodexMarkdownTests.swift
+      - CodexReadingPositionTests.swift
+      - ../Petroglyphs/Components/CodexReadingAnchor.swift
       - ../Petroglyphs/Components/CodexMarkdownDocument.swift
     settings:
       base:

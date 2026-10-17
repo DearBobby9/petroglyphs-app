@@ -42,6 +42,10 @@ struct CodexConversationTurnView: View {
             }
             ForEach(turn.messages.filter { $0.role != "user" && ($0.phase != "commentary" || $0.state == .failed) }, id: \.displayID) { row($0) }
         }
+        .onAppear {
+            let readingID = store.session(for: target).readingMessageID
+            if progress.contains(where: { $0.displayID == readingID }) { processExpanded = true }
+        }
     }
 
     private func row(_ message: CodexConversationMessage) -> some View {
@@ -49,7 +53,7 @@ struct CodexConversationTurnView: View {
             .id(message.displayID)
             .background(GeometryReader { geometry in
                 Color.clear.preference(key: MessagePositionKey.self,
-                                       value: [message.displayID: geometry.frame(in: .named("conversation-scroll")).minY])
+                                       value: [message.displayID: geometry.frame(in: .named("conversation-scroll"))])
             })
     }
 }

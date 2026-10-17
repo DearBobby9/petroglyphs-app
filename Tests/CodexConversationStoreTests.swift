@@ -642,6 +642,24 @@ final class CodexConversationStoreTests: XCTestCase {
         XCTAssertNil(store.session(for: destination).beforeCursor)
     }
 
+    @MainActor
+    func testReadingBlockAndLocalFractionSurviveRestartAndClearAtLatest() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = target()
+        let store = CodexConversationStore(network: ConversationNetworkFixture(), storageRoot: root)
+        store.setReadingPosition("message", atBottom: false, for: destination, blockID: "message:paragraph:7", blockFraction: 0.42)
+        let restored = CodexConversationStore(network: ConversationNetworkFixture(), storageRoot: root)
+        XCTAssertEqual(restored.session(for: destination).readingBlockID, "message:paragraph:7")
+        XCTAssertEqual(restored.session(for: destination).readingBlockFraction, 0.42)
+        XCTAssertFalse(restored.session(for: destination).isAtBottom)
+        restored.setReadingPosition(nil, atBottom: true, for: destination)
+        let latest = CodexConversationStore(network: ConversationNetworkFixture(), storageRoot: root)
+        XCTAssertNil(latest.session(for: destination).readingBlockID)
+        XCTAssertNil(latest.session(for: destination).readingBlockFraction)
+        XCTAssertTrue(latest.session(for: destination).isAtBottom)
+    }
+
     private func numberedMessages(_ numbers: ClosedRange<Int>) -> [CodexConversationMessage] {
         numbers.map { index in
             CodexConversationMessage(id: "message-\(index)", turnId: nil, clientMessageId: nil, role: "assistant", text: "Message \(index)", phase: "final_answer", createdAt: Date(timeIntervalSince1970: Double(index)), state: .completed, attachments: [])

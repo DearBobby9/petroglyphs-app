@@ -167,8 +167,13 @@ private struct CodexConversationTimeline: View {
     let session: CodexConversationSession
     @State private var restoredPosition = false
     @State private var userIsScrolling = false
-    @State private var bottomY: CGFloat = 0
-    @State private var rowPositions: [String: CGFloat] = [:]
+    @State private var readingViewport: CodexReadingViewport?
+    @State private var rowPositions: [String: CGRect] = [:]
+    @State private var blockPositions: [String: CodexReadingBlock] = [:]
+    @State private var pendingRestore: CodexReadingAnchor?
+    @State private var savePositionTask: Task<Void, Never>?
+    @State private var scrollHandle = CodexScrollHandle()
+    @State private var viewportHeight: CGFloat = 0
     @State private var hasNewMessages = false
     private let bottomID = "conversation-bottom"
 
@@ -183,10 +188,12 @@ private struct CodexConversationTimeline: View {
                     LazyVStack(alignment: .leading, spacing: 18) {
                         if session.beforeCursor != nil {
                             Button {
-                                let anchor = firstVisibleID ?? session.messages.first?.displayID
+                                let anchor = visibleAnchor
+                                let wasAtBottom = session.isAtBottom
                                 Task {
                                     await store.loadOlder(for: target)
-                                    if let anchor { proxy.scrollTo(anchor, anchor: .top) }
+                                    if let anchor { restore(anchor, proxy: proxy) }
+                                    else if wasAtBottom { proxy.scrollTo(bottomID, anchor: .bottom) }
                                 }
                             } label: {
                                 HStack {
@@ -221,29 +228,34 @@ private struct CodexConversationTimeline: View {
                                 .accessibilityIdentifier("chat.runState")
                         }
                         Color.clear.frame(height: 1).id(bottomID)
-                            .background(GeometryReader { bottom in
-                                Color.clear.preference(key: ConversationBottomKey.self, value: bottom.frame(in: .named("conversation-scroll")).maxY)
-                            })
                     }
                     .padding(14)
+                    .background(CodexScrollCapture(handle: scrollHandle))
+                    .background(GeometryReader { content in
+                        Color.clear.preference(key: ConversationContentFrameKey.self,
+                                               value: content.frame(in: .named("conversation-scroll")))
+                    })
                 }
                 .coordinateSpace(name: "conversation-scroll")
                 .scrollDismissesKeyboard(.interactively)
                 .accessibilityIdentifier("codex.repliesList")
-                .onPreferenceChange(MessagePositionKey.self) { rowPositions = $0 }
-                .onPreferenceChange(ConversationBottomKey.self) { position in
-                    bottomY = position
-                    let atBottom = position <= geometry.size.height + 60
-                    if atBottom {
-                        session.isAtBottom = true
-                        hasNewMessages = false
-                    } else if userIsScrolling { session.isAtBottom = false }
+                .onPreferenceChange(MessagePositionKey.self) { rowPositions = $0; finishRestoration(); scheduleReadingSave() }
+                .onPreferenceChange(CodexReadingBlockKey.self) { blockPositions = $0; finishRestoration(); scheduleReadingSave() }
+                .onPreferenceChange(ConversationContentFrameKey.self) { frame in
+                    guard let frame else { return }
+                    let viewport = CodexReadingViewport(contentFrame: frame, viewportHeight: geometry.size.height)
+                    let followsLatest = viewport.followingLatest(after: readingViewport, wasFollowingLatest: session.isAtBottom,
+                                                                 isRestoring: !restoredPosition || pendingRestore != nil)
+                    readingViewport = viewport
+                    if followsLatest != session.isAtBottom { saveReadingPosition(atBottom: followsLatest) }
+                    if followsLatest { hasNewMessages = false }
+                    else { scheduleReadingSave() }
                 }
                 .simultaneousGesture(DragGesture(minimumDistance: 3).onChanged { _ in
                     userIsScrolling = true
                 }.onEnded { _ in
-                    let atBottom = bottomY <= geometry.size.height + 60
-                    store.setReadingPosition(firstVisibleID, atBottom: atBottom, for: target)
+                    let atBottom = readingViewport?.isAtBottom ?? session.isAtBottom
+                    saveReadingPosition(atBottom: atBottom)
                     userIsScrolling = false
                 })
                 .onChange(of: revision, initial: true) { _, _ in
@@ -252,24 +264,28 @@ private struct CodexConversationTimeline: View {
                         restoredPosition = true
                         if !session.isAtBottom, let id = session.readingMessageID,
                            session.messages.contains(where: { $0.displayID == id }) {
-                            proxy.scrollTo(id, anchor: .top)
+                            restore(CodexReadingAnchor(messageID: id, blockID: session.readingBlockID ?? id,
+                                                       fraction: session.readingBlockFraction ?? 0), proxy: proxy)
                         } else { proxy.scrollTo(bottomID, anchor: .bottom) }
                     } else if session.isAtBottom && !userIsScrolling {
                         proxy.scrollTo(bottomID, anchor: .bottom)
                     } else { hasNewMessages = true }
                 }
                 .task(id: geometry.size) {
+                    viewportHeight = geometry.size.height
                     let wasFollowingLatest = session.isAtBottom
-                    let readingAnchor = session.readingMessageID ?? firstVisibleID
-                    // Width changes reflow message heights too. Restore after the new
-                    // layout rather than using the lazy stack's previous measurements.
+                    let readingAnchor = session.readingMessageID.map {
+                        CodexReadingAnchor(messageID: $0, blockID: session.readingBlockID ?? $0,
+                                           fraction: session.readingBlockFraction ?? 0)
+                    }
                     await Task.yield()
                     guard !Task.isCancelled, !userIsScrolling else { return }
-                    if wasFollowingLatest && session.isAtBottom {
-                        proxy.scrollTo(bottomID, anchor: .bottom)
-                    } else if !wasFollowingLatest, let readingAnchor {
-                        proxy.scrollTo(readingAnchor, anchor: .top)
-                    }
+                    if wasFollowingLatest && session.isAtBottom { proxy.scrollTo(bottomID, anchor: .bottom) }
+                    else if let readingAnchor { restore(readingAnchor, proxy: proxy) }
+                }
+                .onDisappear {
+                    savePositionTask?.cancel()
+                    if pendingRestore == nil { saveReadingPosition(atBottom: session.isAtBottom) }
                 }
                 .overlay(alignment: .bottomTrailing) {
                     if !session.isAtBottom {
@@ -294,18 +310,67 @@ private struct CodexConversationTimeline: View {
         }
     }
 
-    private var firstVisibleID: String? {
-        rowPositions.filter { $0.value >= -20 }.min { $0.value < $1.value }?.key
+    private var visibleAnchor: CodexReadingAnchor? {
+        var candidates = blockPositions
+        for (id, frame) in rowPositions where !candidates.values.contains(where: { $0.messageID == id }) {
+            candidates[id] = CodexReadingBlock(messageID: id, frame: frame)
+        }
+        return CodexReadingAnchor.visible(in: candidates, viewportHeight: viewportHeight)
+    }
+
+    private func saveReadingPosition(atBottom: Bool) {
+        guard pendingRestore == nil else { return }
+        let anchor = visibleAnchor
+        store.setReadingPosition(anchor?.messageID, atBottom: atBottom, for: target,
+                                 blockID: anchor?.blockID, blockFraction: anchor?.fraction)
+    }
+
+    private func scheduleReadingSave() {
+        guard restoredPosition, pendingRestore == nil, !session.isAtBottom else { return }
+        savePositionTask?.cancel()
+        savePositionTask = Task {
+            try? await Task.sleep(for: .milliseconds(180))
+            guard !Task.isCancelled else { return }
+            saveReadingPosition(atBottom: false)
+        }
+    }
+
+    private func restore(_ anchor: CodexReadingAnchor, proxy: ScrollViewProxy) {
+        pendingRestore = anchor
+        savePositionTask?.cancel()
+        let turn = CodexConversationTurn.group(session.messages).first { $0.messages.contains { $0.displayID == anchor.messageID } }
+        proxy.scrollTo(turn?.id ?? anchor.messageID, anchor: .top)
+        Task { await Task.yield(); finishRestoration() }
+    }
+
+    private func finishRestoration() {
+        guard let anchor = pendingRestore, let scrollView = scrollHandle.scrollView else { return }
+        let message = session.messages.first { $0.displayID == anchor.messageID }
+        let blockIDs = Set(message.map { message in
+            CodexMarkdownDocument(message.text).blocks.map { "\(message.displayID):block:\($0.id)" }
+        } ?? [])
+        guard let restoration = anchor.restoration(in: blockPositions, messageFrame: rowPositions[anchor.messageID], existingBlockIDs: blockIDs) else { return }
+        let previousOffset = scrollView.contentOffset.y
+        scrollHandle.restore(frame: restoration.frame, fraction: restoration.fraction)
+        if let viewport = readingViewport {
+            // This offset was requested by restoration. Make it the baseline so
+            // the resulting measurement does not change the saved reading mode.
+            readingViewport = CodexReadingViewport(
+                contentFrame: viewport.contentFrame.offsetBy(dx: 0, dy: previousOffset - scrollView.contentOffset.y),
+                viewportHeight: viewport.viewportHeight)
+        }
+        pendingRestore = nil
     }
 }
 
 struct MessagePositionKey: PreferenceKey {
-    static var defaultValue: [String: CGFloat] = [:]
-    static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) { value.merge(nextValue(), uniquingKeysWith: { _, new in new }) }
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) { value.merge(nextValue(), uniquingKeysWith: { _, new in new }) }
 }
-private struct ConversationBottomKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = nextValue() }
+
+private struct ConversationContentFrameKey: PreferenceKey {
+    static var defaultValue: CGRect?
+    static func reduce(value: inout CGRect?, nextValue: () -> CGRect?) { value = nextValue() ?? value }
 }
 
 private struct CodexMessageComposer: View {

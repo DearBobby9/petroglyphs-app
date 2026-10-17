@@ -11,6 +11,11 @@ struct CodexMarkdownText: View, Equatable {
             ForEach(document.blocks) { block in
                 blockView(block)
                     .id("\(messageID):block:\(block.id)")
+                    .background(GeometryReader { geometry in
+                        Color.clear.preference(key: CodexReadingBlockKey.self, value: [
+                            "\(messageID):block:\(block.id)": CodexReadingBlock(messageID: messageID, frame: geometry.frame(in: .named("conversation-scroll")))
+                        ])
+                    })
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
