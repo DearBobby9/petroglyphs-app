@@ -212,12 +212,8 @@ private struct CodexConversationTimeline: View {
                                 .padding(.vertical, 30)
                             }
                         }
-                        ForEach(session.messages, id: \.displayID) { message in
-                            CodexMessageRow(message: message, target: target, store: store)
-                                .id(message.displayID)
-                                .background(GeometryReader { row in
-                                    Color.clear.preference(key: MessagePositionKey.self, value: [message.displayID: row.frame(in: .named("conversation-scroll")).minY])
-                                })
+                        ForEach(CodexConversationTurn.group(session.messages)) { turn in
+                            CodexConversationTurnView(turn: turn, target: target, store: store)
                         }
                         if session.runState == "running" || session.runState == "waiting" {
                             Label(session.runState == "waiting" ? "Codex is waiting" : "Codex is working…", systemImage: "ellipsis.bubble")
@@ -303,7 +299,7 @@ private struct CodexConversationTimeline: View {
     }
 }
 
-private struct MessagePositionKey: PreferenceKey {
+struct MessagePositionKey: PreferenceKey {
     static var defaultValue: [String: CGFloat] = [:]
     static func reduce(value: inout [String: CGFloat], nextValue: () -> [String: CGFloat]) { value.merge(nextValue(), uniquingKeysWith: { _, new in new }) }
 }

@@ -31,7 +31,7 @@ struct CodexMessageRow: View {
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else {
-                        CodexMarkdownText(text: message.text)
+                        CodexMarkdownText(text: message.text, messageID: message.displayID).equatable()
                     }
                 }
             }
@@ -186,65 +186,5 @@ struct CodexMessageImage: View {
         .padding(8)
         .frame(maxWidth: .infinity)
         .frame(minHeight: 140)
-    }
-}
-
-private struct CodexMarkdownText: View {
-    let text: String
-    private var blocks: [Block] { Block.parse(text) }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                if block.isCode {
-                    VStack(alignment: .leading, spacing: 0) {
-                        HStack {
-                            Text(block.language.isEmpty ? "Code" : block.language).font(.caption)
-                            Spacer()
-                            Button {
-                                UIPasteboard.general.string = block.text
-                            } label: { Label("Copy", systemImage: "doc.on.doc").font(.caption).frame(minHeight: 44) }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel("Copy code")
-                        }
-                        .padding(.horizontal, 10)
-                        ScrollView(.horizontal) {
-                            Text(block.text)
-                                .font(.system(.callout, design: .monospaced))
-                                .textSelection(.enabled)
-                                .padding(10)
-                        }
-                    }
-                    .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 10))
-                } else {
-                    Text((try? AttributedString(markdown: block.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(block.text))
-                        .textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private struct Block {
-        let text: String
-        let isCode: Bool
-        let language: String
-        static func parse(_ text: String) -> [Block] {
-            var blocks: [Block] = []
-            var lines: [String] = []
-            var isCode = false
-            var language = ""
-            for line in text.components(separatedBy: "\n") {
-                if line.hasPrefix("```") {
-                    if !lines.isEmpty { blocks.append(Block(text: lines.joined(separator: "\n"), isCode: isCode, language: language)) }
-                    lines = []
-                    isCode.toggle()
-                    language = isCode ? String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces) : ""
-                } else { lines.append(line) }
-            }
-            if !lines.isEmpty { blocks.append(Block(text: lines.joined(separator: "\n"), isCode: isCode, language: language)) }
-            return blocks
-        }
     }
 }

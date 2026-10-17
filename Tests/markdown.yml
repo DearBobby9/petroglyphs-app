@@ -1,0 +1,24 @@
+name: MarkdownChecks
+settings:
+  base:
+    MACOSX_DEPLOYMENT_TARGET: '14.0'
+    SWIFT_VERSION: '5.0'
+    CODE_SIGNING_ALLOWED: NO
+targets:
+  CodexMarkdownTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - CodexMarkdownTests.swift
+      - ../Petroglyphs/Components/CodexMarkdownDocument.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bobbyjia.petroglyphs.markdowntests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  MarkdownChecks:
+    build:
+      targets:
+        CodexMarkdownTests: [test]
+    test:
+      targets: [CodexMarkdownTests]
