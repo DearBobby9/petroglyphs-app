@@ -54,6 +54,13 @@ class AppState {
         refreshCreationDrafts()
     }
 
+    func restoreTarget(for serverURL: URL?) {
+        if selectedCodexChat?.serverURL != serverURL {
+            selectedCodexChat = serverURL.flatMap { recentChatStore.latest(for: $0) }
+        }
+        if newCodexChat?.serverURL != serverURL { newCodexChat = nil }
+    }
+
     func refreshSelectedTarget() async {
         guard let original = selectedCodexChat else { return }
         let generation = selectedTargetGeneration

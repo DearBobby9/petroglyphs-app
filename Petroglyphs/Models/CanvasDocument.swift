@@ -2,7 +2,7 @@ import Foundation
 import PencilKit
 
 struct CanvasDocument: Codable {
-    static let schemaVersion = 2
+    static let schemaVersion = 3
     static let emptyBounds = CGRect(x: 0, y: 0, width: 100, height: 100)
 
     let id: UUID
@@ -12,6 +12,7 @@ struct CanvasDocument: Codable {
     var exportBounds: CGRect
     var referenceImage: CanvasDocumentReference?
     var selectedExportBounds: CGRect?
+    var viewport: CanvasViewport?
 
     var contentBounds: CGRect {
         var bounds = Self.isValid(drawing.bounds) ? drawing.bounds : CGRect.null
@@ -27,6 +28,7 @@ struct CanvasDocument: Codable {
         exportBounds = Self.emptyBounds
         referenceImage = nil
         selectedExportBounds = nil
+        viewport = nil
     }
 
     init(from decoder: Decoder) throws {
@@ -44,6 +46,8 @@ struct CanvasDocument: Codable {
         referenceImage = try values.decodeIfPresent(CanvasDocumentReference.self, forKey: .referenceImage)
         selectedExportBounds = try values.decodeIfPresent(CGRect.self, forKey: .selectedExportBounds)
         if let selectedExportBounds, !Self.isValid(selectedExportBounds) { throw DocumentError.invalidBounds }
+        viewport = try values.decodeIfPresent(CanvasViewport.self, forKey: .viewport)
+        if let viewport, !viewport.isValid { throw DocumentError.invalidViewport }
         exportBounds = selectedExportBounds ?? contentBounds
     }
 
@@ -57,6 +61,7 @@ struct CanvasDocument: Codable {
         try values.encode(exportBounds, forKey: .exportBounds)
         try values.encodeIfPresent(referenceImage, forKey: .referenceImage)
         try values.encodeIfPresent(selectedExportBounds, forKey: .selectedExportBounds)
+        try values.encodeIfPresent(viewport, forKey: .viewport)
     }
 
     static func isValid(_ bounds: CGRect) -> Bool {
@@ -66,19 +71,21 @@ struct CanvasDocument: Codable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, id, revision, drawing, background, exportBounds, referenceImage, selectedExportBounds
+        case version, id, revision, drawing, background, exportBounds, referenceImage, selectedExportBounds, viewport
     }
 
     enum DocumentError: LocalizedError {
         case unsupportedVersion(Int)
         case invalidBackground
         case invalidBounds
+        case invalidViewport
 
         var errorDescription: String? {
             switch self {
             case .unsupportedVersion(let version): "Canvas format version \(version) is not supported."
             case .invalidBackground: "The saved canvas background is invalid."
             case .invalidBounds: "The saved canvas export area is invalid."
+            case .invalidViewport: "The saved canvas position or zoom is invalid."
             }
         }
     }

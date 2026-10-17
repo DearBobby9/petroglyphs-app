@@ -163,15 +163,23 @@ private struct CanvasChatPaneLayout: Layout {
     let alignment: Alignment
 
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        InteractionDiagnostics.shared.record(.chatPaneMeasure, geometry: [.paneProposal: [
+            Double(proposal.width ?? -1), Double(proposal.height ?? -1), Double(minimumWidth), Double(minimumHeight)
+        ]])
         let content = subviews.first?.sizeThatFits(proposal) ?? .zero
+        InteractionDiagnostics.shared.record(.chatPaneMeasured)
         return CGSize(width: proposal.width ?? content.width, height: proposal.height ?? content.height)
     }
 
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        InteractionDiagnostics.shared.record(.chatPanePlace, geometry: [.paneBounds: [
+            Double(bounds.width), Double(bounds.height), Double(minimumWidth), Double(minimumHeight)
+        ]])
         let contentWidth = max(minimumWidth, bounds.width)
         let contentHeight = max(minimumHeight, bounds.height)
         let x = alignment == .trailing ? bounds.maxX - contentWidth : bounds.minX
         subviews.first?.place(at: CGPoint(x: x, y: bounds.minY), anchor: .topLeading,
                               proposal: ProposedViewSize(width: contentWidth, height: contentHeight))
+        InteractionDiagnostics.shared.record(.chatPanePlaced)
     }
 }

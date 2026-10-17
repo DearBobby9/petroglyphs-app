@@ -5,7 +5,11 @@
 	<key>PetroglyphsSourceCommit</key>
 	<string>$(PETROGLYPHS_SOURCE_COMMIT)</string>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Petroglyphs reconnects to your paired Mac to send drawings and read Codex replies.</string>
+	<string>Petroglyphs discovers nearby Mac bridges and reconnects to your paired Mac to send drawings and read Codex replies.</string>
+	<key>NSBonjourServices</key>
+	<array><string>_petroglyphs._tcp</string></array>
+	<key>PetroglyphsDiscoveryOrigins</key>
+	<array/>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>

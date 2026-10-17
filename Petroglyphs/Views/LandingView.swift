@@ -3,6 +3,7 @@ import SwiftUI
 struct LandingView: View {
     @Environment(AppState.self) var appState
     @Environment(ConnectionMonitor.self) var connectionMonitor
+    @Environment(BridgeDiscoveryModel.self) private var discovery
     @State private var showServer = false
     @State private var showSettings = false
 
@@ -29,11 +30,20 @@ struct LandingView: View {
                 // Connection status
                 HStack(spacing: 8) {
                     ConnectionDot(isConnected: connectionMonitor.isConnected)
-                    Text(connectionMonitor.isConnected ? "Connected to Mac bridge" : "Mac bridge disconnected")
+                    Text(connectionMonitor.statusDescription)
                         .font(.rounded(14))
                         .foregroundStyle(.secondary)
                 }
                 .padding(.bottom, 28)
+
+                if !connectionMonitor.isConnected || discovery.pairingBridge != nil {
+                    ScrollView {
+                        DiscoveredMacsView().padding(16)
+                    }
+                    .frame(maxWidth: 480, maxHeight: 240)
+                    .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    .padding(.horizontal, 24).padding(.bottom, 20)
+                }
 
                 // Enter button
                 OchreButton(connectionMonitor.isConnected ? "Open workspace" : "Connect to Mac") {

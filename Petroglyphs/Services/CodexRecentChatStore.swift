@@ -13,6 +13,10 @@ final class CodexRecentChatStore {
         targets = defaults.data(forKey: Self.storageKey).flatMap { try? JSONDecoder().decode([CodexChatTarget].self, from: $0) } ?? []
     }
 
+    func latest(for serverURL: URL) -> CodexChatTarget? {
+        targets.first { $0.serverURL == serverURL }
+    }
+
     func remember(_ target: CodexChatTarget) {
         targets.removeAll { $0.serverURL == target.serverURL && $0.host.id == target.host.id && $0.thread.id == target.thread.id }
         targets.insert(target, at: 0)

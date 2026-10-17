@@ -5,6 +5,16 @@ import UIKit
 
 final class CanvasBackgroundExportTests: XCTestCase {
     @MainActor
+    func testStrokeMetadataUsesDocumentCoordinatesAfterViewportTranslation() {
+        let drawing = makeDrawing(ink: .black).transformed(using: CGAffineTransform(translationX: -12_000, y: -8_000))
+        let metadata = drawing.extractStrokeMetadata(duration: 0)
+        XCTAssertEqual(metadata.strokes?.first?.points.first?.x, -11_980)
+        XCTAssertEqual(metadata.strokes?.first?.points.first?.y, -7_980)
+        XCTAssertEqual(metadata.strokes?.first?.points.last?.x, -11_900)
+        XCTAssertEqual(metadata.strokes?.first?.points.last?.y, -7_900)
+    }
+
+    @MainActor
     func testDocumentCompositeKeepsReferenceInkAndCropInTheSameCoordinates() throws {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 1

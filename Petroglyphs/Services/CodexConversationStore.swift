@@ -296,6 +296,8 @@ final class CodexConversationStore {
         do {
             let page = try await network.conversation(for: session.key, before: nil)
             guard !Task.isCancelled else { return }
+            InteractionDiagnostics.shared.record(.historyApplyBegin)
+            defer { InteractionDiagnostics.shared.record(.historyApplyEnd) }
             try validate(page, for: session.key)
             // Newest pages are contiguous windows. Only retain the cached prefix if the
             // new page starts inside it; disjoint windows must be paged again.
@@ -450,12 +452,22 @@ final class CodexConversationStore {
 
     func imageData(_ attachment: CodexConversationAttachment, for target: CodexChatTarget) async throws -> Data {
         let key = CodexConversationKey(target)
-        if let filename = attachment.localFilename { return try Data(contentsOf: localURL(filename, key: key)) }
+        if let filename = attachment.localFilename {
+            InteractionDiagnostics.shared.record(.imageCacheReadBegin)
+            defer { InteractionDiagnostics.shared.record(.imageCacheReadEnd) }
+            return try Data(contentsOf: localURL(filename, key: key))
+        }
         guard attachment.availability == "available", let path = attachment.assetPath else { throw ConversationError.imageUnavailable }
         let digest = SHA256.hash(data: Data(path.utf8)).map { String(format: "%02x", $0) }.joined()
         let file = directory(for: key).appendingPathComponent("asset-\(digest)")
-        if FileManager.default.fileExists(atPath: file.path) { return try Data(contentsOf: file) }
+        if FileManager.default.fileExists(atPath: file.path) {
+            InteractionDiagnostics.shared.record(.imageCacheReadBegin)
+            defer { InteractionDiagnostics.shared.record(.imageCacheReadEnd) }
+            return try Data(contentsOf: file)
+        }
         let data = try await network.conversationImage(at: path, for: key)
+        InteractionDiagnostics.shared.record(.imageCacheWriteBegin)
+        defer { InteractionDiagnostics.shared.record(.imageCacheWriteEnd) }
         try FileManager.default.createDirectory(at: directory(for: key), withIntermediateDirectories: true)
         try data.write(to: file, options: .atomic)
         return data
@@ -624,6 +636,8 @@ final class CodexConversationStore {
     }
 
     private func save(_ session: CodexConversationSession) throws {
+        InteractionDiagnostics.shared.record(.stateSaveBegin)
+        defer { InteractionDiagnostics.shared.record(.stateSaveEnd) }
         guard !session.stateRestorationFailed else { throw ConversationError.protectedState }
         let directory = directory(for: session.key)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -640,6 +654,8 @@ final class CodexConversationStore {
     }
 
     private func saveHistory(_ session: CodexConversationSession) throws {
+        InteractionDiagnostics.shared.record(.historySaveBegin)
+        defer { InteractionDiagnostics.shared.record(.historySaveEnd) }
         let directory = directory(for: session.key)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         if session.historyRestorationFailed {

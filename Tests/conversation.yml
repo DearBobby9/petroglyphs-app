@@ -37,6 +37,7 @@ targets:
       - ../Petroglyphs/Services/NetworkService+ModelSettings.swift
       - ../Petroglyphs/Services/CodexAttachmentImporter.swift
       - ../Petroglyphs/Services/CodexConversationStore.swift
+      - ../Petroglyphs/Services/InteractionDiagnostics.swift
       - ../Petroglyphs/ViewModels/CodexModelSettingsModel.swift
     settings:
       base:

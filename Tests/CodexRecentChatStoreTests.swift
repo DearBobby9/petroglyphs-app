@@ -19,4 +19,23 @@ final class CodexRecentChatStoreTests: XCTestCase {
         restored.remember(a)
         XCTAssertEqual(restored.targets.map(\.thread.id), ["a", "b"])
     }
+    @MainActor
+    func testRestoresOnlyTheMostRecentChatForTheExactBridgeURL() throws {
+        let name = "recent-mac-switch-\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = CodexRecentChatStore(defaults: defaults)
+        let a = URL(string: "http://mac-a.local:3333/device/aaa")!
+        let b = URL(string: "http://mac-b.local:3333/device/bbb")!
+        let host = CodexHost(id: "local", name: "This Mac", kind: "local", configured: true, available: true, reason: nil)
+        for (url, id) in [(a, "a1"), (a, "a2"), (b, "b1")] {
+            store.remember(CodexChatTarget(thread: CodexThread(id: id, title: id, cwd: "/", updatedAt: 0), serverURL: url, host: host))
+        }
+        XCTAssertEqual(store.latest(for: a)?.thread.id, "a2")
+        XCTAssertEqual(store.latest(for: b)?.thread.id, "b1")
+        XCTAssertNil(store.latest(for: URL(string: "http://mac-c.local:3333/device/ccc")!))
+        XCTAssertNil(store.latest(for: URL(string: "http://mac-a.local:3333/device/new-token")!))
+        XCTAssertEqual(CodexRecentChatStore(defaults: defaults).latest(for: a)?.thread.id, "a2")
+    }
+
 }

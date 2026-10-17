@@ -6,6 +6,7 @@ struct BridgeConnectionMetadata: Codable, Equatable, Sendable {
     let id: String
     let lanOrigins: [URL]
     let tailscaleOrigins: [URL]
+    var name: String? = nil
 }
 
 enum BridgeRoute: String, Sendable {
@@ -74,6 +75,7 @@ nonisolated struct PairedBridge: Sendable {
               parts.path.isEmpty, Self.origin(candidate) == candidate,
               candidate.scheme == origin.scheme, candidate.port == origin.port,
               let host = candidate.host else { return false }
+        if route == .tailscale, Self.isTailscaleDNSName(host) { return true }
         if route == .local, host.hasSuffix(".local"), host.count <= 69 {
             let name = host.dropLast(6)
             return !name.isEmpty && name.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
@@ -84,6 +86,23 @@ nonisolated struct PairedBridge: Sendable {
         let ip = partsOfIP.compactMap { Int($0) }
         if route == .tailscale { return ip[0] == 100 && (64...127).contains(ip[1]) }
         return ip[0] == 10 || (ip[0] == 172 && (16...31).contains(ip[1])) || (ip[0] == 192 && ip[1] == 168)
+    }
+
+    static func isTailscaleDNSName(_ host: String) -> Bool {
+        guard host.count <= 253, host == host.lowercased(), host.hasSuffix(".ts.net") else { return false }
+        let labels = host.split(separator: ".", omittingEmptySubsequences: false)
+        return labels.count >= 4 && labels.allSatisfy { label in
+            (1...63).contains(label.count) && label.first != "-" && label.last != "-"
+                && label.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }
+        }
+    }
+
+    static func isTailscaleHost(_ host: String) -> Bool {
+        if isTailscaleDNSName(host) { return true }
+        let parts = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4, parts.allSatisfy({ Int($0).map { (0...255).contains($0) } == true }),
+              parts.allSatisfy({ $0 == "0" || !$0.hasPrefix("0") }) else { return false }
+        return parts[0] == "100" && (64...127).contains(Int(parts[1])!)
     }
 
     func replacingOrigin(of url: URL, with origin: URL) throws -> URL {

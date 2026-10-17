@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ServerSettingsSheet: View {
     @Environment(ConnectionMonitor.self) private var connectionMonitor
+    @Environment(BridgeDiscoveryModel.self) private var discovery
     @Environment(\.dismiss) private var dismiss
     @AppStorage("serverURLString") private var serverURLString: String = ""
     @AppStorage("localURLString") private var localURLString: String = ""
@@ -17,6 +18,7 @@ struct ServerSettingsSheet: View {
     @State private var testTask: Task<Void, Never>?
     @State private var testResult: String?
     @State private var isTesting = false
+    @State private var showAdvancedAddress = false
     @FocusState private var focusedField: Field?
 
     enum Field { case url, code }
@@ -81,8 +83,15 @@ struct ServerSettingsSheet: View {
                 }
 
                 if editingMode == .local {
+                    Section {
+                        DiscoveredMacsView()
+                    } footer: {
+                        Text("Keep Tailscale connected on the iPad and Mac. Approve a new Mac once. Use Connect to switch between saved Macs.")
+                    }
                     if connectionMonitor.serverURL != nil {
                         Section("Connection") {
+                            LabeledContent("Bridge Mac", value: connectionMonitor.bridgeName ?? "Paired Mac")
+                            LabeledContent("Status", value: connectionMonitor.isConnected ? "Connected" : (connectionMonitor.isReconnecting ? "Reconnecting" : "Disconnected"))
                             LabeledContent("Route", value: connectionMonitor.transportDescription)
                                 .accessibilityIdentifier("connection.transport")
                                 .accessibilityValue(connectionMonitor.transportDescription)
@@ -97,20 +106,27 @@ struct ServerSettingsSheet: View {
                                 .foregroundStyle(.secondary)
                                 .accessibilityIdentifier("connection.recovery")
                                 .accessibilityValue(connectionMonitor.backupReady ? "Backup address saved" : "Backup unavailable")
+                            if let checked = connectionMonitor.lastVerifiedAt {
+                                LabeledContent("Last verified") { Text(checked, style: .time) }
+                            }
+                            Text("The route above connects this iPad to the bridge. Choose the Codex execution machine separately in the chat picker.")
+                                .font(.footnote).foregroundStyle(.secondary)
                         }
                     }
                     Section {
-                        TextField("Paired Mac URL", text: $input)
-                            .keyboardType(.URL)
-                            .autocorrectionDisabled()
-                            .textInputAutocapitalization(.never)
-                            .focused($focusedField, equals: .url)
-                            .submitLabel(.done)
-                            .onSubmit { focusedField = nil }
+                        DisclosureGroup("Existing paired address", isExpanded: $showAdvancedAddress) {
+                            TextField("Paired Mac URL", text: $input)
+                                .keyboardType(.URL)
+                                .autocorrectionDisabled()
+                                .textInputAutocapitalization(.never)
+                                .focused($focusedField, equals: .url)
+                                .submitLabel(.done)
+                                .onSubmit { focusedField = nil }
+                        }
                     } header: {
-                        Text("Paired Mac address")
+                        Text("Advanced")
                     } footer: {
-                        Text("Use the paired URL from your Mac. After the first connection, Petroglyphs reconnects over the local network and uses Tailscale when needed. Keep Tailscale connected on both devices.")
+                        Text("For an existing paired URL or custom installation. This address contains a private pairing credential. Automatic discovery does not need manual address entry.")
                     }
                 } else {
                     Section {
@@ -167,6 +183,7 @@ struct ServerSettingsSheet: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
                         invalidateTest()
+                        if discovery.pairingBridge != nil { discovery.cancelPairing() }
                         dismiss()
                     }
                 }
@@ -176,11 +193,14 @@ struct ServerSettingsSheet: View {
                         saveConnection()
                         dismiss()
                     }
-                    .disabled(!canSave)
+                    .disabled(!canSave || discovery.pairingBridge != nil)
                 }
             }
             .onAppear(perform: loadFormState)
-            .onDisappear(perform: invalidateTest)
+            .onDisappear {
+                invalidateTest()
+                if discovery.pairingBridge != nil { discovery.cancelPairing() }
+            }
             .onChange(of: input) { _, _ in invalidateTest() }
             .onChange(of: codeInput) { _, _ in invalidateTest() }
             .onChange(of: editingMode) { _, _ in
@@ -188,6 +208,12 @@ struct ServerSettingsSheet: View {
                 invalidateTest()
             }
             .onChange(of: pendingDisconnect) { _, _ in invalidateTest() }
+            .onChange(of: discovery.connectionRevision) { _, _ in
+                if let url = discovery.pairedURL {
+                    input = url.absoluteString
+                    pendingDisconnect = false
+                }
+            }
         }
     }
 

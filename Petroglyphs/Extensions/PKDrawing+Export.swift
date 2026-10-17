@@ -9,9 +9,10 @@ extension PKDrawing {
         let strokeData: [StrokeMetadata.Stroke] = strokes.map { stroke in
             let creationTime = stroke.path.creationDate.timeIntervalSince1970
             let points: [StrokePoint] = stroke.path.map { point in
-                StrokePoint(
-                    x: Double(point.location.x),
-                    y: Double(point.location.y),
+                let location = point.location.applying(stroke.transform)
+                return StrokePoint(
+                    x: Double(location.x),
+                    y: Double(location.y),
                     pressure: Double(point.force),
                     timestamp: creationTime + point.timeOffset
                 )

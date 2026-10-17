@@ -79,6 +79,18 @@ actor BridgeTransport {
         connections[failure.pairedKey] == nil && failures[failure.pairedKey] == failure
     }
 
+    /// Learn a freshly paired route without changing this Mac's conversation key.
+    func learn(origin: URL, for url: URL) async throws {
+        guard let bridge = PairedBridge(url) else { throw URLError(.badURL) }
+        let route: BridgeRoute = bridge.accepts(origin, route: .tailscale) ? .tailscale : .local
+        guard bridge.accepts(origin, route: route) else { throw URLError(.badURL) }
+        let result = try await Self.verify(origin: origin, route: route, bridge: bridge, send: send)
+        profiles[bridge.storageKey] = result.health.bridge
+        connections[bridge.storageKey] = CachedConnection(snapshot: result, checkedAt: Date())
+        failures[bridge.storageKey] = nil
+        if let data = try? JSONEncoder().encode(profiles) { defaults.set(data, forKey: Self.storageKey) }
+    }
+
     func forget(_ url: URL) {
         guard let bridge = PairedBridge(url) else { return }
         let key = bridge.storageKey
@@ -131,9 +143,11 @@ actor BridgeTransport {
         guard let metadata = health.bridge, metadata.id == bridge.identity, metadata.version == 1 else { throw URLError(.userAuthenticationRequired) }
         let filtered = BridgeConnectionMetadata(version: 1, id: metadata.id,
             lanOrigins: Array(metadata.lanOrigins.filter { bridge.accepts($0, route: .local) }.prefix(5)),
-            tailscaleOrigins: Array(metadata.tailscaleOrigins.filter { bridge.accepts($0, route: .tailscale) }.prefix(2)))
-        return BridgeConnectionSnapshot(health: HealthResponse(status: health.status, version: health.version,
-            submissions: health.submissions, autoReply: health.autoReply, bridge: filtered), origin: origin, route: route,
+            tailscaleOrigins: Array(metadata.tailscaleOrigins.filter { bridge.accepts($0, route: .tailscale) }.prefix(2)),
+            name: metadata.name.map { String($0.prefix(100)) })
+        var verifiedHealth = health
+        verifiedHealth.bridge = filtered
+        return BridgeConnectionSnapshot(health: verifiedHealth, origin: origin, route: route,
             backupReady: !filtered.tailscaleOrigins.isEmpty, automaticRecoveryReady: true)
     }
 
@@ -157,7 +171,7 @@ actor BridgeTransport {
     private struct IdentityProof: Decodable { let id: String; let nonce: String; let origin: String; let proof: String }
 }
 
-private final class BridgeHTTPSession: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+final class BridgeHTTPSession: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
     static let shared = BridgeHTTPSession()
     private var session: URLSession!
     override init() {

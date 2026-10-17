@@ -1,6 +1,69 @@
 import XCTest
 
 final class CodexReadingPositionTests: XCTestCase {
+    @MainActor
+    func testRepeatedScrollMeasurementsDoNotRequestAnotherReadingUpdate() {
+        let coordinator = CodexReadingCoordinator()
+        coordinator.restoredPosition = true
+        let history = CodexReadingViewport(contentFrame: CGRect(x: 0, y: -1_000, width: 400, height: 2_000), viewportHeight: 600)
+        XCTAssertEqual(coordinator.updateMetrics(history, wasFollowingLatest: false), false)
+        XCTAssertNil(coordinator.updateMetrics(history, wasFollowingLatest: false),
+                     "A repeated preference must not schedule another save or render update.")
+        XCTAssertEqual(coordinator.readingViewport, history)
+        let bottom = CodexReadingViewport(contentFrame: CGRect(x: 0, y: -1_400, width: 400, height: 2_000), viewportHeight: 600)
+        XCTAssertEqual(coordinator.updateMetrics(bottom, wasFollowingLatest: false), true,
+                       "A real scroll back to the bottom must still resume following replies.")
+    }
+
+    @MainActor
+    func testMiniHistoryGeometryNoiseDoesNotContinuouslyRescheduleReadingSaves() {
+        let coordinator = CodexReadingCoordinator()
+        coordinator.restoredPosition = true
+        let frame = CGRect(x: 0, y: -3101, width: 384, height: 4938)
+        let baseline = CodexReadingViewport(contentFrame: frame, viewportHeight: 561.5)
+        XCTAssertEqual(coordinator.updateMetrics(baseline, wasFollowingLatest: false), false)
+        var requestedUpdates = 0
+        for index in 0..<15_000 {
+            let width = index.isMultiple(of: 2) ? CGFloat(384).nextUp : CGFloat(384)
+            let noisy = CodexReadingViewport(contentFrame: CGRect(x: 0, y: -3101, width: width, height: 4938),
+                                             viewportHeight: index.isMultiple(of: 2) ? CGFloat(561.5).nextDown : 561.5)
+            if coordinator.updateMetrics(noisy, wasFollowingLatest: false) != nil { requestedUpdates += 1 }
+        }
+        XCTAssertEqual(requestedUpdates, 0, "Subpixel geometry noise must not keep cancelling and scheduling reading saves.")
+        XCTAssertEqual(coordinator.readingViewport, baseline)
+        // Compare with the last accepted baseline, so real accumulated movement
+        // is not lost when each individual layout step is small.
+        for offset in [CGFloat(0.2), 0.4] {
+            XCTAssertNil(coordinator.updateMetrics(CodexReadingViewport(contentFrame: frame.offsetBy(dx: 0, dy: offset), viewportHeight: 561.5),
+                                                  wasFollowingLatest: false))
+        }
+        XCTAssertEqual(coordinator.updateMetrics(CodexReadingViewport(contentFrame: frame.offsetBy(dx: 0, dy: 0.6), viewportHeight: 561.5),
+                                                 wasFollowingLatest: false), false)
+    }
+
+    func testViewportWidthNoiseDoesNotHideARealScrollToLatest() {
+        let before = CodexReadingViewport(contentFrame: CGRect(x: 0, y: -3101, width: 384, height: 4938), viewportHeight: 561.5)
+        let bottom = CodexReadingViewport(contentFrame: CGRect(x: 0, y: -4376.5, width: CGFloat(384).nextUp, height: 4938),
+                                         viewportHeight: CGFloat(561.5).nextDown)
+        XCTAssertTrue(bottom.followingLatest(after: before, wasFollowingLatest: false, isRestoring: false))
+    }
+
+    @MainActor
+    func testCollapsedAndInvalidMeasurementsPreserveTheLastReadingBaseline() {
+        let coordinator = CodexReadingCoordinator()
+        coordinator.restoredPosition = true
+        let history = CodexReadingViewport(contentFrame: CGRect(x: 0, y: -1_000, width: 400, height: 2_000), viewportHeight: 600)
+        _ = coordinator.updateMetrics(history, wasFollowingLatest: false)
+        for transient in [
+            CodexReadingViewport(contentFrame: CGRect(x: 0, y: 0, width: 0, height: 2_000), viewportHeight: 600),
+            CodexReadingViewport(contentFrame: history.contentFrame, viewportHeight: 0),
+            CodexReadingViewport(contentFrame: CGRect(x: 0, y: CGFloat.nan, width: 400, height: 2_000), viewportHeight: 600)
+        ] {
+            XCTAssertNil(coordinator.updateMetrics(transient, wasFollowingLatest: false))
+            XCTAssertEqual(coordinator.readingViewport, history)
+        }
+    }
+
     func testLongBlockCrossingViewportTopWinsOverNextMessage() throws {
         let anchor = try XCTUnwrap(CodexReadingAnchor.visible(in: [
             "long:block:2": CodexReadingBlock(messageID: "long", frame: CGRect(x: 0, y: -500, width: 300, height: 1_000)),

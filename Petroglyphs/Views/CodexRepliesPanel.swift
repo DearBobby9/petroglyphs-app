@@ -179,15 +179,8 @@ private struct CodexConversationTimeline: View {
     let store: CodexConversationStore
     let target: CodexChatTarget
     let session: CodexConversationSession
-    @State private var restoredPosition = false
-    @State private var userIsScrolling = false
-    @State private var readingViewport: CodexReadingViewport?
-    @State private var rowPositions: [String: CGRect] = [:]
-    @State private var blockPositions: [String: CodexReadingBlock] = [:]
-    @State private var pendingRestore: CodexReadingAnchor?
-    @State private var savePositionTask: Task<Void, Never>?
+    @State private var reading = CodexReadingCoordinator()
     @State private var scrollHandle = CodexScrollHandle()
-    @State private var viewportHeight: CGFloat = 0
     @State private var hasNewMessages = false
     private let bottomID = "conversation-bottom"
 
@@ -207,7 +200,7 @@ private struct CodexConversationTimeline: View {
                                 Task {
                                     await store.loadOlder(for: target)
                                     if let anchor { restore(anchor, proxy: proxy) }
-                                    else if wasAtBottom { proxy.scrollTo(bottomID, anchor: .bottom) }
+                                    else if wasAtBottom { scrollTimeline(proxy, to: bottomID, anchor: .bottom) }
                                 }
                             } label: {
                                 HStack {
@@ -259,53 +252,68 @@ private struct CodexConversationTimeline: View {
                 .coordinateSpace(name: "conversation-scroll")
                 .scrollDismissesKeyboard(.interactively)
                 .accessibilityIdentifier("codex.repliesList")
-                .onPreferenceChange(MessagePositionKey.self) { rowPositions = $0; finishRestoration(); scheduleReadingSave() }
-                .onPreferenceChange(CodexReadingBlockKey.self) { blockPositions = $0; finishRestoration(); scheduleReadingSave() }
+                .onPreferenceChange(MessagePositionKey.self) {
+                    InteractionDiagnostics.shared.record(.chatRowsPreference)
+                    reading.rowPositions = $0; finishRestoration(); scheduleReadingSave()
+                }
+                .onPreferenceChange(CodexReadingBlockKey.self) {
+                    InteractionDiagnostics.shared.record(.chatBlocksPreference)
+                    reading.blockPositions = $0; finishRestoration(); scheduleReadingSave()
+                }
                 .onPreferenceChange(ConversationContentFrameKey.self) { frame in
+                    InteractionDiagnostics.shared.record(.chatContentPreference)
                     guard let frame else { return }
                     let viewport = CodexReadingViewport(contentFrame: frame, viewportHeight: geometry.size.height)
-                    let followsLatest = viewport.followingLatest(after: readingViewport, wasFollowingLatest: session.isAtBottom,
-                                                                 isRestoring: !restoredPosition || pendingRestore != nil)
-                    readingViewport = viewport
+                    guard let followsLatest = reading.updateMetrics(viewport, wasFollowingLatest: session.isAtBottom) else {
+                        InteractionDiagnostics.shared.record(.chatMetricsIgnored)
+                        return
+                    }
+                    InteractionDiagnostics.shared.record(.chatMetricsChanged, geometry: [.chatContentFrame: [
+                        Double(frame.minX), Double(frame.minY), Double(frame.width), Double(frame.height)
+                    ]])
                     if followsLatest != session.isAtBottom { saveReadingPosition(atBottom: followsLatest) }
-                    if followsLatest { hasNewMessages = false }
-                    else { scheduleReadingSave() }
+                    if followsLatest {
+                        if hasNewMessages { hasNewMessages = false }
+                    } else { scheduleReadingSave() }
                 }
                 .simultaneousGesture(DragGesture(minimumDistance: 3).onChanged { _ in
-                    userIsScrolling = true
+                    reading.userIsScrolling = true
                 }.onEnded { _ in
-                    let atBottom = readingViewport?.isAtBottom ?? session.isAtBottom
+                    let atBottom = reading.readingViewport?.isAtBottom ?? session.isAtBottom
                     saveReadingPosition(atBottom: atBottom)
-                    userIsScrolling = false
+                    reading.userIsScrolling = false
                 })
                 .onChange(of: revision, initial: true) { _, _ in
                     guard !session.messages.isEmpty else { return }
-                    if !restoredPosition {
-                        restoredPosition = true
+                    if !reading.restoredPosition {
+                        reading.restoredPosition = true
                         if !session.isAtBottom, let id = session.readingMessageID,
                            session.messages.contains(where: { $0.displayID == id }) {
                             restore(CodexReadingAnchor(messageID: id, blockID: session.readingBlockID ?? id,
                                                        fraction: session.readingBlockFraction ?? 0), proxy: proxy)
-                        } else { proxy.scrollTo(bottomID, anchor: .bottom) }
-                    } else if session.isAtBottom && !userIsScrolling {
-                        proxy.scrollTo(bottomID, anchor: .bottom)
+                        } else { scrollTimeline(proxy, to: bottomID, anchor: .bottom) }
+                    } else if session.isAtBottom && !reading.userIsScrolling {
+                        scrollTimeline(proxy, to: bottomID, anchor: .bottom)
                     } else { hasNewMessages = true }
                 }
                 .task(id: geometry.size) {
-                    viewportHeight = geometry.size.height
+                    InteractionDiagnostics.shared.record(.chatGeometry, geometry: [.chatGeometry: [
+                        Double(geometry.size.width), Double(geometry.size.height)
+                    ]])
+                    reading.viewportHeight = geometry.size.height
                     let wasFollowingLatest = session.isAtBottom
                     let readingAnchor = session.readingMessageID.map {
                         CodexReadingAnchor(messageID: $0, blockID: session.readingBlockID ?? $0,
                                            fraction: session.readingBlockFraction ?? 0)
                     }
                     await Task.yield()
-                    guard !Task.isCancelled, !userIsScrolling else { return }
-                    if wasFollowingLatest && session.isAtBottom { proxy.scrollTo(bottomID, anchor: .bottom) }
+                    guard !Task.isCancelled, !reading.userIsScrolling else { return }
+                    if wasFollowingLatest && session.isAtBottom { scrollTimeline(proxy, to: bottomID, anchor: .bottom) }
                     else if let readingAnchor { restore(readingAnchor, proxy: proxy) }
                 }
                 .onDisappear {
-                    savePositionTask?.cancel()
-                    if pendingRestore == nil { saveReadingPosition(atBottom: session.isAtBottom) }
+                    reading.savePositionTask?.cancel()
+                    if reading.pendingRestore == nil { saveReadingPosition(atBottom: session.isAtBottom) }
                 }
                 .overlay(alignment: .bottomTrailing) {
                     if !session.isAtBottom {
@@ -313,7 +321,7 @@ private struct CodexConversationTimeline: View {
                             session.isAtBottom = true
                             hasNewMessages = false
                             store.setReadingPosition(nil, atBottom: true, for: target)
-                            withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(bottomID, anchor: .bottom) }
+                            withAnimation(.easeOut(duration: 0.2)) { scrollTimeline(proxy, to: bottomID, anchor: .bottom) }
                         } label: {
                             Label(hasNewMessages ? "New messages" : "Latest", systemImage: "arrow.down")
                                 .font(.caption.weight(.semibold))
@@ -330,56 +338,76 @@ private struct CodexConversationTimeline: View {
         }
     }
 
+    private func scrollTimeline(_ proxy: ScrollViewProxy, to id: String, anchor: UnitPoint) {
+        InteractionDiagnostics.shared.record(.chatScrollToBegin)
+        defer { InteractionDiagnostics.shared.record(.chatScrollToEnd) }
+        proxy.scrollTo(id, anchor: anchor)
+    }
+
     private var visibleAnchor: CodexReadingAnchor? {
-        var candidates = blockPositions
-        for (id, frame) in rowPositions where !candidates.values.contains(where: { $0.messageID == id }) {
+        var candidates = reading.blockPositions
+        for (id, frame) in reading.rowPositions where !candidates.values.contains(where: { $0.messageID == id }) {
             candidates[id] = CodexReadingBlock(messageID: id, frame: frame)
         }
-        return CodexReadingAnchor.visible(in: candidates, viewportHeight: viewportHeight)
+        return CodexReadingAnchor.visible(in: candidates, viewportHeight: reading.viewportHeight)
     }
 
     private func saveReadingPosition(atBottom: Bool) {
-        guard pendingRestore == nil else { return }
+        guard reading.pendingRestore == nil else { return }
         let anchor = visibleAnchor
         store.setReadingPosition(anchor?.messageID, atBottom: atBottom, for: target,
                                  blockID: anchor?.blockID, blockFraction: anchor?.fraction)
     }
 
     private func scheduleReadingSave() {
-        guard restoredPosition, pendingRestore == nil, !session.isAtBottom else { return }
-        savePositionTask?.cancel()
-        savePositionTask = Task {
+        guard reading.restoredPosition, reading.pendingRestore == nil, !session.isAtBottom else { return }
+        InteractionDiagnostics.shared.record(.chatReadingSaveScheduled)
+        reading.savePositionTask?.cancel()
+        reading.savePositionTask = Task {
             try? await Task.sleep(for: .milliseconds(180))
             guard !Task.isCancelled else { return }
+            InteractionDiagnostics.shared.record(.chatReadingSaveCompleted)
             saveReadingPosition(atBottom: false)
         }
     }
 
     private func restore(_ anchor: CodexReadingAnchor, proxy: ScrollViewProxy) {
-        pendingRestore = anchor
-        savePositionTask?.cancel()
+        reading.pendingRestore = anchor
+        reading.savePositionTask?.cancel()
         let turn = CodexConversationTurn.group(session.messages).first { $0.messages.contains { $0.displayID == anchor.messageID } }
-        proxy.scrollTo(turn?.id ?? anchor.messageID, anchor: .top)
+        InteractionDiagnostics.shared.record(.chatRestore, flags: [.chatHasPendingRestore: true, .chatAnchorExists: turn != nil])
+        scrollTimeline(proxy, to: turn?.id ?? anchor.messageID, anchor: .top)
         Task { await Task.yield(); finishRestoration() }
     }
 
     private func finishRestoration() {
-        guard let anchor = pendingRestore, let scrollView = scrollHandle.scrollView else { return }
+        InteractionDiagnostics.shared.record(.chatRestoreAttempt, flags: [
+            .chatHasPendingRestore: reading.pendingRestore != nil, .chatHasScrollView: scrollHandle.scrollView != nil
+        ])
+        guard let anchor = reading.pendingRestore, let scrollView = scrollHandle.scrollView else { return }
         let message = session.messages.first { $0.displayID == anchor.messageID }
         let blockIDs = Set(message.map { message in
             CodexMarkdownDocument(message.text).blocks.map { "\(message.displayID):block:\($0.id)" }
         } ?? [])
-        guard let restoration = anchor.restoration(in: blockPositions, messageFrame: rowPositions[anchor.messageID], existingBlockIDs: blockIDs) else { return }
+        guard let restoration = anchor.restoration(in: reading.blockPositions, messageFrame: reading.rowPositions[anchor.messageID], existingBlockIDs: blockIDs) else {
+            InteractionDiagnostics.shared.record(.chatRestoreMissingFrame, flags: [
+                .chatAnchorExists: message != nil, .chatAnchorFrameExists: false
+            ])
+            return
+        }
         let previousOffset = scrollView.contentOffset.y
         scrollHandle.restore(frame: restoration.frame, fraction: restoration.fraction)
-        if let viewport = readingViewport {
+        if let viewport = reading.readingViewport {
             // This offset was requested by restoration. Make it the baseline so
             // the resulting measurement does not change the saved reading mode.
-            readingViewport = CodexReadingViewport(
+            reading.readingViewport = CodexReadingViewport(
                 contentFrame: viewport.contentFrame.offsetBy(dx: 0, dy: previousOffset - scrollView.contentOffset.y),
                 viewportHeight: viewport.viewportHeight)
         }
-        pendingRestore = nil
+        reading.pendingRestore = nil
+        InteractionDiagnostics.shared.record(.chatRestoreCompleted, flags: [
+            .chatHasPendingRestore: false, .chatAnchorExists: message != nil, .chatAnchorFrameExists: true
+        ])
     }
 }
 
@@ -592,7 +620,10 @@ private struct CodexMessageComposer: View {
     }
 
     private func send() {
+        InteractionDiagnostics.shared.record(.composerSendBegin, flags: [.composerCanSubmit: canSubmit])
+        defer { InteractionDiagnostics.shared.record(.composerSendEnd) }
         guard canSubmit else { return }
+        InteractionDiagnostics.shared.record(.composerSendAccepted)
         store.setReadingPosition(nil, atBottom: true, for: target)
         Task { await store.sendDraft(to: target, modelSettings: modelSettings) }
     }
@@ -615,7 +646,16 @@ private struct CodexDraftThumbnail: View {
         .accessibilityLabel(attachment.name)
         .accessibilityIdentifier("chat.draftAttachment.\(attachment.id)")
         .task(id: attachment.id) {
-            if let data = try? await store.imageData(attachment.messageAttachment, for: target) { image = UIImage(data: data) }
+            if let data = try? await store.imageData(attachment.messageAttachment, for: target) {
+                InteractionDiagnostics.shared.record(.draftImageDecodeBegin)
+                let decoded = UIImage(data: data)
+                InteractionDiagnostics.shared.record(.draftImageDecodeEnd)
+                InteractionDiagnostics.shared.record(.draftImagePublishBegin, geometry: decoded.map { [
+                    .draftImageSize: [Double($0.size.width), Double($0.size.height)]
+                ] } ?? [:])
+                image = decoded
+                InteractionDiagnostics.shared.record(.draftImagePublishEnd)
+            }
         }
     }
 }

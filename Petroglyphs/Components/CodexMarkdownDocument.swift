@@ -7,6 +7,8 @@ struct CodexMarkdownDocument {
     let blocks: [CodexMarkdownBlock]
 
     init(_ source: String) {
+        InteractionDiagnostics.shared.record(.markdownParseBegin)
+        defer { InteractionDiagnostics.shared.record(.markdownParseEnd) }
         self.source = source
         guard let parsed = try? AttributedString(markdown: source) else {
             blocks = [CodexMarkdownBlock(id: "0", kind: .paragraph, text: AttributedString(source))]

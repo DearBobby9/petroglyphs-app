@@ -103,6 +103,8 @@ extension NetworkService: CodexConversationNetworking {
 
     private func readConversationJSON<T: Decodable>(_ request: URLRequest) async throws -> T {
         let (data, response) = try await BridgeTransport.shared.data(for: request)
+        InteractionDiagnostics.shared.record(.conversationDecodeBegin)
+        defer { InteractionDiagnostics.shared.record(.conversationDecodeEnd) }
         try validateConversationResponse(response, data: data)
         return try Self.conversationDecoder().decode(T.self, from: data)
     }

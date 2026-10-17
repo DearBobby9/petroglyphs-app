@@ -5,6 +5,8 @@ struct CodexConversationTurn: Identifiable {
     var messages: [CodexConversationMessage]
 
     static func group(_ messages: [CodexConversationMessage]) -> [CodexConversationTurn] {
+        InteractionDiagnostics.shared.record(.chatTurnGroupingBegin)
+        defer { InteractionDiagnostics.shared.record(.chatTurnGroupingEnd) }
         var turns: [CodexConversationTurn] = []
         for message in messages {
             let id = message.turnId.map { "turn:\($0)" } ?? message.displayID

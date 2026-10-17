@@ -1,18 +1,62 @@
 import Foundation
 import CoreGraphics
 
+/// Scroll measurements and pending work do not render UI. Keep them in a
+/// stable, non-observable owner so preference callbacks do not invalidate the
+/// view that emitted the preference.
+@MainActor
+final class CodexReadingCoordinator {
+    var restoredPosition = false
+    var userIsScrolling = false
+    var readingViewport: CodexReadingViewport?
+    var rowPositions: [String: CGRect] = [:]
+    var blockPositions: [String: CodexReadingBlock] = [:]
+    var pendingRestore: CodexReadingAnchor?
+    var savePositionTask: Task<Void, Never>?
+    var viewportHeight: CGFloat = 0
+
+    // A nil result is a repeated or transient measurement. Callers must not
+    // schedule a save or update rendered state for it.
+    func updateMetrics(_ viewport: CodexReadingViewport, wasFollowingLatest: Bool) -> Bool? {
+        guard viewport.isUsable else { return nil }
+        if let previous = readingViewport, viewport.hasSameMetrics(as: previous) { return nil }
+        let followsLatest = viewport.followingLatest(after: readingViewport, wasFollowingLatest: wasFollowingLatest,
+                                                     isRestoring: !restoredPosition || pendingRestore != nil)
+        readingViewport = viewport
+        return followsLatest
+    }
+}
+
 struct CodexReadingViewport: Equatable {
     let contentFrame: CGRect
     let viewportHeight: CGFloat
+    private static let measurementTolerance: CGFloat = 0.5
+
+    // Layout can alternate between values such as 384 and 384.nextUp. Compare
+    // against the accepted baseline so tiny steps can still accumulate into a scroll.
+    func hasSameMetrics(as previous: Self) -> Bool {
+        abs(contentFrame.minX - previous.contentFrame.minX) <= Self.measurementTolerance
+            && abs(contentFrame.minY - previous.contentFrame.minY) <= Self.measurementTolerance
+            && abs(contentFrame.width - previous.contentFrame.width) <= Self.measurementTolerance
+            && abs(contentFrame.height - previous.contentFrame.height) <= Self.measurementTolerance
+            && abs(viewportHeight - previous.viewportHeight) <= Self.measurementTolerance
+    }
+
+    var isUsable: Bool {
+        contentFrame.origin.x.isFinite && contentFrame.origin.y.isFinite
+            && contentFrame.width.isFinite && contentFrame.height.isFinite
+            && contentFrame.width > 0 && contentFrame.height > 0
+            && viewportHeight.isFinite && viewportHeight > 0
+    }
 
     var isAtBottom: Bool { contentFrame.maxY <= viewportHeight + 60 }
 
     func followingLatest(after previous: Self?, wasFollowingLatest: Bool, isRestoring: Bool) -> Bool {
         guard !isRestoring, let previous, viewportHeight > 0 else { return wasFollowingLatest }
         // A resized viewport or newly appended content is not a reading gesture.
-        guard viewportHeight == previous.viewportHeight,
-              contentFrame.width == previous.contentFrame.width,
-              abs(contentFrame.minY - previous.contentFrame.minY) > 0.5 else { return wasFollowingLatest }
+        guard abs(viewportHeight - previous.viewportHeight) <= Self.measurementTolerance,
+              abs(contentFrame.width - previous.contentFrame.width) <= Self.measurementTolerance,
+              abs(contentFrame.minY - previous.contentFrame.minY) > Self.measurementTolerance else { return wasFollowingLatest }
         return isAtBottom
     }
 }

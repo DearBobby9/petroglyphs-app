@@ -1,0 +1,25 @@
+name: ComposerChecks
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: '17.6'
+    SWIFT_VERSION: '5.0'
+    CODE_SIGNING_ALLOWED: NO
+targets:
+  CodexComposerInputTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - CodexComposerInputTests.swift
+      - ../Petroglyphs/Components/CodexComposerInput.swift
+      - ../Petroglyphs/Services/InteractionDiagnostics.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bobbyjia.petroglyphs.composertests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  ComposerChecks:
+    build:
+      targets:
+        CodexComposerInputTests: [test]
+    test:
+      targets: [CodexComposerInputTests]

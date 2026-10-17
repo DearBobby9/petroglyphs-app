@@ -18,7 +18,9 @@ struct CodexComposerInput: UIViewRepresentable {
         view.adjustsFontForContentSizeCategory = true
         view.textContainerInset = UIEdgeInsets(top: 10, left: 3, bottom: 10, right: 3)
         view.textContainer.lineFragmentPadding = 0
-        view.isScrollEnabled = false
+        // The visible height is bounded by sizeThatFits. Keep scrolling enabled
+        // so measuring different proposals never changes UIKit layout behavior.
+        view.isScrollEnabled = true
         view.keyboardDismissMode = .interactive
         view.accessibilityLabel = "Message Codex"
         view.accessibilityIdentifier = "chat.composer"
@@ -27,21 +29,41 @@ struct CodexComposerInput: UIViewRepresentable {
     }
 
     func updateUIView(_ view: ImagePastingTextView, context: Context) {
+        InteractionDiagnostics.shared.record(.composerUpdateBegin)
+        defer { InteractionDiagnostics.shared.record(.composerUpdateEnd) }
         context.coordinator.parent = self
-        if view.text != text && view.markedTextRange == nil { view.text = text }
-        view.isEditable = enabled
+        if view.text != text && view.markedTextRange == nil {
+            InteractionDiagnostics.shared.record(.composerTextReplaceBegin)
+            view.text = text
+            InteractionDiagnostics.shared.record(.composerTextReplaceEnd)
+            InteractionDiagnostics.shared.record(.composerIntrinsicInvalidationBegin)
+            view.invalidateIntrinsicContentSize()
+            InteractionDiagnostics.shared.record(.composerIntrinsicInvalidationEnd)
+        }
+        if view.isEditable != enabled { view.isEditable = enabled }
         view.onPasteImages = onPasteImages
         view.onSubmit = onSubmit
         if !enabled && view.isFirstResponder { view.resignFirstResponder() }
-        view.invalidateIntrinsicContentSize()
     }
 
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ImagePastingTextView, context: Context) -> CGSize? {
-        guard let width = proposal.width, width > 0 else { return nil }
-        let desired = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
+        InteractionDiagnostics.shared.record(.composerMeasureBegin, geometry: [.composerProposal: [
+            Double(proposal.width ?? -1), Double(proposal.height ?? -1)
+        ]], flags: [.composerScrollEnabled: uiView.isScrollEnabled])
+        defer { InteractionDiagnostics.shared.record(.composerMeasureEnd) }
+        return Self.measuredSize(proposedWidth: proposal.width, view: uiView)
+    }
+
+    static func measuredSize(proposedWidth: CGFloat?, view: ImagePastingTextView) -> CGSize? {
+        guard let width = proposedWidth, width.isFinite, width > 0 else { return nil }
+        InteractionDiagnostics.shared.record(.composerNativeMeasureBegin)
+        let desired = view.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
+        InteractionDiagnostics.shared.record(.composerNativeMeasureEnd)
         let maximum = min(140, UIFont.preferredFont(forTextStyle: .body).lineHeight * 5 + 20)
         let height = min(max(44, desired), maximum)
-        uiView.isScrollEnabled = desired > maximum
+        InteractionDiagnostics.shared.record(.composerMeasurement, geometry: [.composerMeasurement: [
+            Double(width), Double(desired), Double(maximum), Double(height)
+        ]])
         return CGSize(width: width, height: height)
     }
 
@@ -55,7 +77,9 @@ struct CodexComposerInput: UIViewRepresentable {
         init(_ parent: CodexComposerInput) { self.parent = parent }
         func textViewDidChange(_ textView: UITextView) {
             parent.text = textView.text
+            InteractionDiagnostics.shared.record(.composerIntrinsicInvalidationBegin)
             textView.invalidateIntrinsicContentSize()
+            InteractionDiagnostics.shared.record(.composerIntrinsicInvalidationEnd)
         }
         func textViewDidBeginEditing(_ textView: UITextView) { parent.onFocusChanged(true) }
         func textViewDidEndEditing(_ textView: UITextView) { parent.onFocusChanged(false) }
@@ -65,6 +89,14 @@ struct CodexComposerInput: UIViewRepresentable {
 final class ImagePastingTextView: UITextView {
     var onPasteImages: (([NSItemProvider]) -> Void)?
     var onSubmit: (() -> Void)?
+
+    override func layoutSubviews() {
+        InteractionDiagnostics.shared.record(.composerLayoutBegin, geometry: [.composerBounds: [
+            Double(bounds.origin.x), Double(bounds.origin.y), Double(bounds.width), Double(bounds.height)
+        ]])
+        defer { InteractionDiagnostics.shared.record(.composerLayoutEnd) }
+        super.layoutSubviews()
+    }
 
     override var keyCommands: [UIKeyCommand]? {
         (super.keyCommands ?? []) + [UIKeyCommand(title: "Send message", action: #selector(sendFromKeyboard), input: "\r", modifierFlags: .command)]

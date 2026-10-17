@@ -13,6 +13,7 @@ targets:
       - CodexReadingPositionTests.swift
       - ../Petroglyphs/Components/CodexReadingAnchor.swift
       - ../Petroglyphs/Components/CodexMarkdownDocument.swift
+      - ../Petroglyphs/Services/InteractionDiagnostics.swift
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bobbyjia.petroglyphs.markdowntests

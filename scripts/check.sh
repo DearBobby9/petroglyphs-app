@@ -13,6 +13,7 @@ run_check() {
     case "$name" in
         background) spec=project; scheme=CanvasBackgroundChecks ;;
         canvas) spec=canvas-project; scheme=CanvasDocumentChecks ;;
+        composer) spec=composer; scheme=ComposerChecks ;;
         markdown) spec=markdown; scheme=MarkdownChecks ;;
         conversation) spec=conversation; scheme=ConversationChecks ;;
         projects) spec=projects; scheme=ProjectChecks ;;
@@ -20,7 +21,7 @@ run_check() {
         reconnect) spec=reconnect; scheme=ReconnectChecks ;;
         ui) spec=simulator-ui; scheme=PetroglyphsSimulatorChecks ;;
         build) scheme=Petroglyphs ;;
-        *) echo "Usage: scripts/check.sh [all|build|background|canvas|markdown|conversation|projects|layout|reconnect|ui] [xcodebuild options]" >&2; return 2 ;;
+        *) echo "Usage: scripts/check.sh [all|build|background|canvas|composer|markdown|conversation|projects|layout|reconnect|ui] [xcodebuild options]" >&2; return 2 ;;
     esac
 
     mkdir -p "$project_root/build/checks"
@@ -54,7 +55,7 @@ run_check() {
 }
 
 if [[ "$check" == all ]]; then
-    for suite in canvas markdown conversation projects layout reconnect build ui; do
+    for suite in canvas composer markdown conversation projects layout reconnect build ui; do
         run_check "$suite" "$@"
     done
 else

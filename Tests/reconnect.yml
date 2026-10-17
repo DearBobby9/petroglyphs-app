@@ -10,6 +10,10 @@ targets:
     platform: iOS
     sources:
       - BridgeTransportTests.swift
+      - BridgeDiscoveryTests.swift
+      - ../Petroglyphs/Models/BridgeDiscovery.swift
+      - ../Petroglyphs/Services/BridgeDiscoveryClient.swift
+      - ../Petroglyphs/ViewModels/BridgeDiscoveryModel.swift
       - ../Petroglyphs/Models/BridgeConnection.swift
       - ../Petroglyphs/Models/HealthResponse.swift
       - ../Petroglyphs/Services/BridgeTransport.swift

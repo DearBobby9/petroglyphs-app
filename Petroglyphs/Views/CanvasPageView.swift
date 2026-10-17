@@ -227,6 +227,7 @@ struct CanvasPageView: View {
                 .onChange(of: availableSize.width) { _, _ in resizingChatExtent = nil }
                 .onChange(of: useSidebar) { _, _ in resizingChatExtent = nil }
                 .onPreferenceChange(CodexChatChromeHeightKey.self) { heights in
+                    InteractionDiagnostics.shared.record(.workspaceChromePreference)
                     let readingHeight: CGFloat = dynamicTypeSize.isAccessibilitySize ? 180 : 120
                     chatMinimumHeight = max(360, heights.values.reduce(0, +) + readingHeight)
                 }
@@ -278,10 +279,6 @@ struct CanvasPageView: View {
             }
         }
         .onChange(of: connectionMonitor.serverURL) { _, _ in
-            if appState.selectedCodexChat?.serverURL != connectionMonitor.serverURL {
-                appState.selectedCodexChat = nil
-            }
-            if appState.newCodexChat?.serverURL != connectionMonitor.serverURL { appState.newCodexChat = nil }
             pickerServer = nil
         }
         .sheet(item: $pickerServer) { server in
@@ -457,6 +454,17 @@ struct CanvasPageView: View {
                         }
                         .disabled(vm.drawing.strokes.isEmpty)
                         Text("Undo is available while this app stays open. Saved ink is restored after restart.")
+                        Section("Canvas view · \(Int((vm.viewport?.zoom ?? 1) * 100))%") {
+                            Button("Fit content", systemImage: "arrow.up.left.and.arrow.down.right") { vm.navigateCanvas(.fitContent) }
+                                .accessibilityIdentifier("canvas.fitContent")
+                            Button("Actual size", systemImage: "1.magnifyingglass") { vm.navigateCanvas(.actualSize) }
+                                .accessibilityIdentifier("canvas.actualSize")
+                            Button("Zoom in", systemImage: "plus.magnifyingglass") { vm.navigateCanvas(.zoomIn) }
+                                .disabled((vm.viewport?.zoom ?? 1) >= CanvasViewport.maximumZoom)
+                            Button("Zoom out", systemImage: "minus.magnifyingglass") { vm.navigateCanvas(.zoomOut) }
+                                .disabled((vm.viewport?.zoom ?? 1) <= CanvasViewport.minimumZoom)
+                            Text("Pan in any direction with a finger. Pinch to zoom. Use Apple Pencil to draw.")
+                        }
                         Section("Reference image") {
                             Button("Import result image", systemImage: "folder") { showReferenceFiles = true }
                             Button("Choose photo", systemImage: "photo") { showReferencePhotos = true }
@@ -515,6 +523,15 @@ struct CanvasPageView: View {
                     .padding(12).background(Color.panelBackground, in: RoundedRectangle(cornerRadius: 12))
                     .padding(.horizontal, 16)
                     .accessibilityIdentifier("canvas.storageError")
+                }
+                if vm.isAtCoordinateLimit {
+                    HStack {
+                        Text("Canvas coordinate limit reached.").font(.caption)
+                        Button("Fit content") { vm.navigateCanvas(.fitContent) }.frame(minHeight: 44)
+                    }
+                    .padding(8).background(Color.panelBackground, in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal, 16)
+                    .accessibilityIdentifier("canvas.coordinateLimit")
                 }
                 if let connectionMessage {
                     Text(connectionMessage)

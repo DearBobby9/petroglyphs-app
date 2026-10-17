@@ -10,10 +10,12 @@ final class CodexExecutionControlModel {
     private(set) var error: String?
     private(set) var stopResult: CodexStopTurnResult?
     private(set) var uncertainTurnID: String?
+    private(set) var lastStopFailure: (turnId: String, message: String)?
     @ObservationIgnored private let network: any CodexExecutionControlNetworking
     @ObservationIgnored private var key: CodexConversationKey?
     @ObservationIgnored private var loadID = UUID()
     @ObservationIgnored private var destinationGeneration = UUID()
+    @ObservationIgnored private var latestObservedActiveTurnID: String?
 
     init(network: any CodexExecutionControlNetworking = NetworkService()) { self.network = network }
 
@@ -31,7 +33,11 @@ final class CodexExecutionControlModel {
         let key = CodexConversationKey(target)
         let id = UUID()
         loadID = id
-        if self.key != key { destinationGeneration = UUID(); controls = nil; uncertainTurnID = nil; stopResult = nil; isStopping = false }
+        if self.key != key {
+            destinationGeneration = UUID()
+            controls = nil; uncertainTurnID = nil; stopResult = nil; lastStopFailure = nil
+            latestObservedActiveTurnID = nil; isStopping = false
+        }
         self.key = key
         isLoading = true
         defer { if loadID == id { isLoading = false } }
@@ -40,6 +46,9 @@ final class CodexExecutionControlModel {
             guard loadID == id, !Task.isCancelled else { return }
             guard result.hostId == key.hostId, result.threadId == key.threadId else { throw NetworkService.NetworkError.badResponse }
             controls = result
+            // Retain the newest observed turn even after it finishes or a read fails.
+            // An older in-flight stop must not replace that turn's feedback.
+            if let turnID = result.activeTurnId { latestObservedActiveTurnID = turnID }
             if result.activeTurnId != uncertainTurnID { uncertainTurnID = nil }
             error = uncertainTurnID == nil ? nil : "The stop result is not confirmed. Check this turn in Codex in ChatGPT Desktop."
         } catch {
@@ -60,10 +69,13 @@ final class CodexExecutionControlModel {
             guard result.hostId == key.hostId, result.threadId == key.threadId, result.turnId == turnID,
                   ["stopped", "already_finished"].contains(result.status) else { throw NetworkService.NetworkError.badResponse }
             stopResult = result
+            if lastStopFailure?.turnId == turnID { lastStopFailure = nil }
             if controls?.activeTurnId == turnID { controls = nil }
-            error = nil
+            if latestObservedActiveTurnID == turnID { error = nil }
         } catch {
             guard self.key == key, destinationGeneration == generation else { return }
+            lastStopFailure = (turnID, error.localizedDescription)
+            guard latestObservedActiveTurnID == turnID else { return }
             if let failure = error as? CodexControlNotSent {
                 uncertainTurnID = nil
                 controls = nil // Require a fresh capability read before a manual retry.

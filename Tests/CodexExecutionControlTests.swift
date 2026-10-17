@@ -54,6 +54,30 @@ final class CodexExecutionControlTests: XCTestCase {
     }
 
     @MainActor
+    func testLateStopFailuresDoNotReplaceNewerTurnControls() async throws {
+        for failure in [StopFailure.notSent, .unknown] {
+            let network = ControlNetworkFixture()
+            await network.suspendStop()
+            let model = CodexExecutionControlModel(network: network)
+            let target = makeTarget()
+            await model.load(for: target)
+            let stop = Task { await model.stop() }
+            await network.waitForStop()
+            await network.advanceToNextTurn()
+            await model.load(for: target)
+            await network.finishStop(failure: failure)
+            await stop.value
+            XCTAssertEqual(model.controls?.activeTurnId, "turn-b")
+            XCTAssertTrue(model.canStop)
+            XCTAssertNil(model.error)
+            XCTAssertNil(model.uncertainTurnID)
+            XCTAssertEqual(model.lastStopFailure?.turnId, "turn-a", "The original failure remains attributable to A")
+            let sent = await network.stopIDs
+            XCTAssertEqual(sent, ["turn-a"], "A late failure must not replay either turn's stop")
+        }
+    }
+
+    @MainActor
     func testNotSentAllowsManualRetryOnlyAfterFreshControls() async throws {
         let network = ControlNetworkFixture()
         await network.rejectWithoutSending()
@@ -79,12 +103,14 @@ final class CodexExecutionControlTests: XCTestCase {
     }
 }
 
+private enum StopFailure: Sendable { case notSent, unknown }
+
 private actor ControlNetworkFixture: CodexExecutionControlNetworking {
     private var turnID = "turn-a"
     private var shouldSuspend = false
     private var notSent = false
     func rejectWithoutSending() { notSent = true }
-    private var gate: CheckedContinuation<Void, Never>?
+    private var gate: CheckedContinuation<Void, Error>?
     private var entered: CheckedContinuation<Void, Never>?
     var stopIDs: [String] = []
 
@@ -94,7 +120,14 @@ private actor ControlNetworkFixture: CodexExecutionControlNetworking {
         if gate != nil { return }
         await withCheckedContinuation { entered = $0 }
     }
-    func finishStop() { gate?.resume(); gate = nil }
+    func finishStop(failure: StopFailure? = nil) {
+        switch failure {
+        case .notSent: gate?.resume(throwing: CodexControlNotSent(message: "Unavailable before dispatch"))
+        case .unknown: gate?.resume(throwing: URLError(.timedOut))
+        case nil: gate?.resume()
+        }
+        gate = nil
+    }
     func executionControls(for key: CodexConversationKey) async throws -> CodexExecutionControls {
         CodexExecutionControls(hostId: key.hostId, threadId: key.threadId, observedAt: "2026-10-17T01:00:00Z", activeTurnId: turnID,
             capabilities: .init(stop: .init(supported: true, reason: nil, handlingLocation: "ipad"),
@@ -105,7 +138,7 @@ private actor ControlNetworkFixture: CodexExecutionControlNetworking {
         stopIDs.append(turnID)
         if notSent { throw CodexControlNotSent(message: "Unavailable before dispatch") }
         if shouldSuspend {
-            await withCheckedContinuation { continuation in
+            try await withCheckedThrowingContinuation { continuation in
                 gate = continuation
                 entered?.resume()
                 entered = nil

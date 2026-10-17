@@ -15,6 +15,58 @@ final class BridgeTransportTests: XCTestCase {
 
     override func tearDown() { defaults.removePersistentDomain(forName: suite) }
 
+    func testWirelessPairingLearnsRouteWithoutForkingSavedChatIdentity() async throws {
+        let bridge = PairedBridge(paired)!
+        let fixture = BridgeFixture(bridge: bridge, lan: [stable], tail: [tail])
+        await fixture.setReachable([tail])
+        let transport = BridgeTransport(defaults: defaults, send: { try await fixture.send($0) })
+        try await transport.learn(origin: tail, for: paired)
+        let request = URLRequest(url: paired.appendingPathComponent("api/codex/conversation"))
+        _ = try await transport.data(for: request)
+        let calls = await fixture.requests()
+        XCTAssertEqual(calls.last?.url?.host, tail.host)
+        XCTAssertEqual(calls.last?.url?.path, request.url?.path)
+        XCTAssertEqual(PairedBridge(paired)?.storageKey, bridge.storageKey)
+        let restarted = BridgeTransport(defaults: defaults, send: { try await fixture.send($0) })
+        let recovered = try await restarted.connect(to: paired)
+        XCTAssertEqual(recovered.origin, tail)
+    }
+
+    func testMagicDNSRouteRequiresTheSameBridgeIdentityBeforeSendingCredentials() async throws {
+        let dns = URL(string: "http://fixture-mac.tail-example.ts.net:3333")!
+        let bridge = PairedBridge(paired)!
+        let fixture = BridgeFixture(bridge: bridge, lan: [], tail: [dns])
+        await fixture.setReachable([dns])
+        let transport = BridgeTransport(defaults: defaults, send: { try await fixture.send($0) })
+        try await transport.learn(origin: dns, for: paired)
+        _ = try await transport.data(for: URLRequest(url: paired.appendingPathComponent("api/codex/conversation")))
+        let calls = await fixture.requests()
+        XCTAssertEqual(calls.last?.url?.host, dns.host)
+        XCTAssertEqual(PairedBridge(paired)?.storageKey, bridge.storageKey)
+        await fixture.setInvalidProof("signature")
+        let rejected = BridgeTransport(defaults: defaults, send: { try await fixture.send($0) })
+        let before = await fixture.requests().count
+        do { try await rejected.learn(origin: dns, for: paired); XCTFail("Accepted an unverified DNS route") } catch {}
+        let newCalls = await fixture.requests().dropFirst(before)
+        XCTAssertFalse(newCalls.contains { $0.url?.path.contains("/device/") == true })
+    }
+
+    func testPairedHealthPreservesModernCapabilitiesAndLegacyFallback() async throws {
+        let fixture = BridgeFixture(bridge: PairedBridge(paired)!, lan: [stable], tail: [])
+        let transport = BridgeTransport(defaults: defaults, send: { try await fixture.send($0) })
+        await fixture.setHealth(autoReply: false, capabilities: .init(conversations: true, projects: true, controls: true))
+        let modern = try await transport.connect(to: paired)
+        XCTAssertTrue(modern.health.supportsCodexConversations)
+        XCTAssertEqual(modern.health.capabilities?.projects, true)
+        XCTAssertEqual(modern.health.capabilities?.controls, true)
+        await fixture.setHealth(autoReply: true, capabilities: .init(conversations: false, projects: false, controls: false))
+        let disabled = try await transport.connect(to: paired, force: true)
+        XCTAssertFalse(disabled.health.supportsCodexConversations, "Explicit capabilities take precedence over the legacy worker")
+        await fixture.setHealth(autoReply: true, capabilities: nil)
+        let legacy = try await transport.connect(to: paired, force: true)
+        XCTAssertTrue(legacy.health.supportsCodexConversations)
+    }
+
     func testExpiredIPUsesPersistedHostnameWithoutChangingChatOrReceiptIdentity() async throws {
         let bridge = PairedBridge(paired)!
         let fixture = BridgeFixture(bridge: bridge, lan: [stable, old], tail: [tail])
@@ -166,6 +218,8 @@ private actor BridgeFixture {
     var reachable: Set<URL>
     var invalidProof: String?
     var failPost = false
+    var autoReplyEnabled = true
+    var capabilities: HealthResponse.Capabilities?
     var calls: [URLRequest] = []
     var holdBusiness = false
     var heldBusiness: CheckedContinuation<(Data, URLResponse), Error>?
@@ -180,6 +234,10 @@ private actor BridgeFixture {
     func setLAN(_ origins: [URL]) { metadata = BridgeConnectionMetadata(version: 1, id: metadata.id, lanOrigins: origins, tailscaleOrigins: metadata.tailscaleOrigins) }
     func setInvalidProof(_ value: String) { invalidProof = value }
     func setFailPost(_ value: Bool) { failPost = value }
+    func setHealth(autoReply: Bool, capabilities: HealthResponse.Capabilities?) {
+        autoReplyEnabled = autoReply
+        self.capabilities = capabilities
+    }
     func requests() -> [URLRequest] { calls }
     func holdNextBusinessRequest() { holdBusiness = true }
     func waitForHeldBusinessRequest() async {
@@ -211,7 +269,7 @@ private actor BridgeFixture {
         }
         if url.path.hasSuffix("/api/health") {
             return response(url, data: try JSONEncoder().encode(HealthResponse(status: "ok", version: "test", submissions: 0,
-                autoReply: .init(enabled: true), bridge: metadata)))
+                autoReply: .init(enabled: autoReplyEnabled), capabilities: capabilities, bridge: metadata)))
         }
         if request.httpMethod == "POST", failPost { throw URLError(.timedOut) }
         if holdBusiness {

@@ -14,6 +14,8 @@ final class CodexScrollHandle {
 
     func restore(frame: CGRect, fraction: Double) {
         guard let scrollView else { return }
+        InteractionDiagnostics.shared.record(.chatNativeScrollBegin)
+        defer { InteractionDiagnostics.shared.record(.chatNativeScrollEnd) }
         let desired = scrollView.contentOffset.y + frame.minY + frame.height * CGFloat(fraction)
         let lower = -scrollView.adjustedContentInset.top
         let upper = max(lower, scrollView.contentSize.height - scrollView.bounds.height + scrollView.adjustedContentInset.bottom)
@@ -26,6 +28,8 @@ struct CodexScrollCapture: UIViewRepresentable {
     func makeUIView(context: Context) -> UIView { UIView(frame: .zero) }
     func updateUIView(_ view: UIView, context: Context) {
         DispatchQueue.main.async { [weak view, weak handle] in
+            InteractionDiagnostics.shared.record(.chatScrollCaptureBegin)
+            defer { InteractionDiagnostics.shared.record(.chatScrollCaptureEnd) }
             var ancestor = view?.superview
             while let current = ancestor {
                 if let scrollView = current as? UIScrollView { handle?.scrollView = scrollView; return }

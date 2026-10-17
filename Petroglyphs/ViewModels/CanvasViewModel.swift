@@ -32,6 +32,10 @@ final class CanvasViewModel {
     var contentBounds: CGRect { document.contentBounds }
     var referenceImage: CanvasDocumentReference? { document.referenceImage }
     var selectedExportBounds: CGRect? { document.selectedExportBounds }
+    var viewport: CanvasViewport? { document.viewport }
+    private(set) var viewportCommand: CanvasViewportCommand?
+    private(set) var viewportCommandID = 0
+    private(set) var isAtCoordinateLimit = false
     var hasContent: Bool { !drawing.strokes.isEmpty || referenceImage != nil }
     var snapshotFilename: String { "canvas-\(documentID.uuidString.lowercased())-r\(revision).png" }
     var canUndo: Bool { !undoDrawings.isEmpty }
@@ -84,12 +88,31 @@ final class CanvasViewModel {
         exporter.pngData(document: document)
     }
 
+    func navigateCanvas(_ command: CanvasViewportCommand) {
+        viewportCommand = command
+        viewportCommandID += 1
+    }
+
+    func completeCanvasNavigation(_ commandID: Int) {
+        if viewportCommandID == commandID { viewportCommand = nil }
+    }
+
+    func saveViewport(_ viewport: CanvasViewport, atCoordinateLimit: Bool = false) {
+        guard viewport.isValid else { return }
+        isAtCoordinateLimit = atCoordinateLimit
+        guard viewport != document.viewport else { return }
+        document.viewport = viewport
+        // Moving the camera does not change snapshot identity or drawing undo.
+        save()
+    }
+
     func setReferenceImage(data: Data, name: String, sourceID: String) throws {
         let reference = try CanvasDocumentReference(data: data, name: name, sourceID: sourceID)
         document.referenceImage = reference
         document.selectedExportBounds = nil
         refreshExportBounds()
         documentChanged()
+        navigateCanvas(.fitContent)
     }
 
     func clearReferenceImage() {

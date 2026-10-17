@@ -12,6 +12,9 @@ class ConnectionMonitor {
     private(set) var backupReady = false
     private(set) var automaticRecoveryReady = false
     private(set) var isReconnecting = false
+    private(set) var bridgeName: String?
+    private(set) var lastVerifiedAt: Date?
+    private(set) var connectionError: String?
 
     private var timer: Timer?
     private var pathMonitor: NWPathMonitor?
@@ -22,6 +25,11 @@ class ConnectionMonitor {
     private var verifiedGeneration: UUID?
 
     var transportDescription: String { isConnected ? (route?.rawValue ?? "Direct") : "Disconnected" }
+    var statusDescription: String {
+        if isConnected { return "\(bridgeName ?? "Mac bridge") · \(transportDescription)" }
+        if isReconnecting { return "Reconnecting to Mac bridge…" }
+        return connectionError ?? "Mac bridge disconnected"
+    }
     var recoveryDescription: String {
         if backupReady { return "Local network first · Tailscale backup address saved. Keep Tailscale connected on this iPad to use it." }
         if automaticRecoveryReady { return "Local network reconnect ready · Tailscale unavailable" }
@@ -34,6 +42,7 @@ class ConnectionMonitor {
             isConnected = false; requiresCodexThread = nil; activeEndpoint = nil; route = nil
             verifiedGeneration = nil
             backupReady = false; automaticRecoveryReady = false
+            bridgeName = nil; lastVerifiedAt = nil; connectionError = nil
         }
         // This stays the original paired URL across route changes. Conversation
         // keys, drafts, selected chats and pending IDs continue to use it.
@@ -48,6 +57,7 @@ class ConnectionMonitor {
         requiresCodexThread = nil; activeEndpoint = nil; route = nil
         verifiedGeneration = nil
         backupReady = false; automaticRecoveryReady = false
+        bridgeName = nil; lastVerifiedAt = nil; connectionError = nil
     }
 
     func setForeground(_ active: Bool) {
@@ -69,10 +79,13 @@ class ConnectionMonitor {
                 self.verifiedGeneration = snapshot.generation
                 self.backupReady = snapshot.backupReady
                 self.automaticRecoveryReady = snapshot.automaticRecoveryReady
+                self.bridgeName = snapshot.health.bridge?.name
+                self.lastVerifiedAt = Date(); self.connectionError = nil
                 self.isConnected = true
             } catch {
                 guard let self, !Task.isCancelled, self.serverURL == url else { return }
                 self.isConnected = false
+                self.connectionError = "Mac unreachable. Check the bridge and Tailscale connection."
             }
             guard let self, self.serverURL == url, !Task.isCancelled else { return }
             self.isReconnecting = false

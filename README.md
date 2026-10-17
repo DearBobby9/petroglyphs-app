@@ -10,6 +10,18 @@ The bridge implementation and API documentation are in the sibling
 native creator. Remote project creation uses the configured companion route.
 Creation receipts retain their original route during recovery.
 
+The app discovers compatible Mac bridges over Tailscale and Bonjour. Select a
+Mac, compare its six-digit code, and approve on that Mac. Pairing does not need
+a cable or manual address entry. The connection page distinguishes the network
+route from the selected Codex execution machine. The canvas supports four-way
+navigation, 25%–400% zoom, and saved viewports. See the
+[connection and canvas guide](docs/WIRELESS-AND-CANVAS.md) for installation setup,
+daily use, and the numeric precision boundary.
+
+The [2026-10-17 progress and TODO](docs/PROGRESS-2026-10-17.md) records completed
+device checks and the remaining layout stall with a saved image draft. Cross-Mac
+round-trip acceptance is still incomplete.
+
 ## Checks
 
 Requirements: Xcode with an iOS Simulator runtime, and XcodeGen for XCTest.

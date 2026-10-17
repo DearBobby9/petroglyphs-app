@@ -45,7 +45,17 @@ struct CodexComposerScroll<Content: View>: View {
                 })
         }
         .frame(height: min(maximumHeight, max(44, contentHeight)))
+        // Keep the editor and Send at the visible end when the keyboard or an
+        // attachment changes the available space. Attachments remain scrollable.
+        .defaultScrollAnchor(.bottom)
         .scrollBounceBehavior(.basedOnSize)
-        .onPreferenceChange(CodexComposerContentHeightKey.self) { contentHeight = $0 }
+        .onPreferenceChange(CodexComposerContentHeightKey.self) {
+            InteractionDiagnostics.shared.record(.composerHeightPreferenceBegin, geometry: [.composerHeight: [
+                Double($0), Double(contentHeight), Double(maximumHeight)
+            ]])
+            defer { InteractionDiagnostics.shared.record(.composerHeightPreferenceEnd) }
+            guard $0.isFinite, $0 > 0, $0 != contentHeight else { return }
+            contentHeight = $0
+        }
     }
 }

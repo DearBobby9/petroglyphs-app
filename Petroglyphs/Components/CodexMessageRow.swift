@@ -174,9 +174,16 @@ struct CodexMessageImage: View {
             do {
                 let data = try await store.imageData(attachment, for: target)
                 guard !Task.isCancelled else { return }
-                guard let decoded = UIImage(data: data) else { throw CodexConversationStore.ConversationError.imageUnavailable }
+                InteractionDiagnostics.shared.record(.imageDecodeBegin)
+                let decoded = UIImage(data: data)
+                InteractionDiagnostics.shared.record(.imageDecodeEnd)
+                guard let decoded else { throw CodexConversationStore.ConversationError.imageUnavailable }
+                InteractionDiagnostics.shared.record(.resultImagePublishBegin, geometry: [.resultImageSize: [
+                    Double(decoded.size.width), Double(decoded.size.height)
+                ]])
                 image = decoded
                 error = nil
+                InteractionDiagnostics.shared.record(.resultImagePublishEnd)
             } catch {
                 guard !Task.isCancelled else { return }
                 self.error = error.localizedDescription
