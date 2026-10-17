@@ -238,10 +238,15 @@ struct CodexThreadPickerView: View {
             ContentUnavailableView {
                 Label("No chats found", systemImage: "bubble.left.and.bubble.right")
             } description: {
-                Text(request.query.isEmpty ? "Open a Codex chat at this location, then refresh." : "Try another chat title.")
+                Text(request.query.isEmpty ? "Choose a project to create a chat on this machine." : "Try another chat title or choose a project.")
             } actions: {
                 Button("Refresh") { reloadID += 1 }
                     .buttonStyle(.bordered)
+            }
+            .overlay(alignment: .bottom) {
+                Button("Choose project and start chat", systemImage: "square.and.pencil") { scope = .projects; searchText = "" }
+                    .buttonStyle(.borderedProminent).frame(minHeight: 44).padding(20)
+                    .accessibilityIdentifier("codex.emptyNewChat")
             }
             .accessibilityIdentifier("codex.empty")
         } else {
@@ -329,7 +334,7 @@ struct CodexThreadPickerView: View {
 
     private func choose(_ thread: CodexThread, host: CodexHost, project: CodexProject? = nil) {
         selection = CodexChatTarget(thread: thread, serverURL: serverURL, host: host,
-                                    projectId: project?.id, projectName: project?.displayName)
+                                    projectId: project?.id ?? thread.projectId, projectName: project?.displayName ?? thread.projectName)
         onChoose()
         dismiss()
     }
@@ -540,7 +545,7 @@ private struct CodexProjectChatsView: View {
             List {
                 ForEach(model.threads) { thread in
                     Button { onChoose(thread) } label: {
-                        CodexPickerThreadRow(thread: thread, isSelected: isSelected(thread))
+                        CodexPickerThreadRow(thread: thread, isSelected: isSelected(thread), projectName: project.displayName)
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("codex.thread.\(thread.id)")
@@ -584,6 +589,7 @@ private struct CodexProjectChatsView: View {
 private struct CodexPickerThreadRow: View {
     let thread: CodexThread
     let isSelected: Bool
+    var projectName: String? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -592,7 +598,9 @@ private struct CodexPickerThreadRow: View {
                     .font(.headline)
                     .foregroundStyle(Color.charcoal)
                     .lineLimit(3)
-                if !thread.cwd.isEmpty {
+                if let name = projectName ?? thread.projectName {
+                    Label(name, systemImage: "folder").font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                } else if !thread.cwd.isEmpty {
                     Text(thread.cwd)
                         .font(.caption)
                         .foregroundStyle(.secondary)

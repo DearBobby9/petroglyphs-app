@@ -5,6 +5,8 @@ struct CodexThread: Codable, Identifiable, Equatable {
     let title: String
     let cwd: String
     let updatedAt: TimeInterval
+    var projectId: String? = nil
+    var projectName: String? = nil
 
     var displayTitle: String {
         title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled chat" : title

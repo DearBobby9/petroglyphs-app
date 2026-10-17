@@ -113,7 +113,7 @@ struct CodexRepliesPanel: View {
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 3) {
                             Text(target.thread.displayTitle).font(.subheadline.weight(.semibold)).lineLimit(1)
-                            Label([target.host.name, target.projectName].compactMap { $0 }.joined(separator: " · "), systemImage: target.host.kind == "remote" ? "network" : "desktopcomputer")
+                            Label([target.host.name, target.projectName ?? target.thread.projectName ?? target.thread.cwd].compactMap { $0 }.joined(separator: " · "), systemImage: target.host.kind == "remote" ? "network" : "desktopcomputer")
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 0)
