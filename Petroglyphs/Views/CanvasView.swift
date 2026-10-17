@@ -3,20 +3,17 @@ import PencilKit
 
 struct CanvasView: UIViewRepresentable {
     @Environment(\.colorScheme) private var colorScheme
-    @Binding var drawing: PKDrawing
-    var backgroundColor: UIColor = .white
+    @Bindable var viewModel: CanvasViewModel
     var isDrawingActive = true
-    var onFirstStroke: () -> Void
-    var onClear: (() -> Void)?
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(drawing: $drawing, onFirstStroke: onFirstStroke, onClear: onClear)
+        Coordinator(viewModel: viewModel)
     }
 
     func makeUIView(context: Context) -> PKCanvasView {
         let canvas = PKCanvasView()
-        canvas.drawing = drawing
-        canvas.backgroundColor = backgroundColor.withAlphaComponent(1)
+        canvas.drawing = viewModel.drawing
+        canvas.backgroundColor = viewModel.background.uiColor
         canvas.isOpaque = true
         canvas.delegate = context.coordinator
 
@@ -55,9 +52,9 @@ struct CanvasView: UIViewRepresentable {
             if isDrawingActive { canvas.becomeFirstResponder() }
             else if canvas.isFirstResponder { canvas.resignFirstResponder() }
         }
-        canvas.backgroundColor = backgroundColor.withAlphaComponent(1)
-        if canvas.drawing != drawing {
-            canvas.drawing = drawing
+        canvas.backgroundColor = viewModel.background.uiColor
+        if canvas.drawing != viewModel.drawing {
+            canvas.drawing = viewModel.drawing
         }
     }
 
@@ -69,28 +66,24 @@ struct CanvasView: UIViewRepresentable {
     }
 
     class Coordinator: NSObject, PKCanvasViewDelegate {
-        @Binding var drawing: PKDrawing
-        var onFirstStroke: () -> Void
-        var onClear: (() -> Void)?
+        let viewModel: CanvasViewModel
         var toolPicker: PKToolPicker?
         var isDrawingActive = true
         private var hasStrokedOnce = false
 
-        init(drawing: Binding<PKDrawing>, onFirstStroke: @escaping () -> Void, onClear: (() -> Void)?) {
-            _drawing = drawing
-            self.onFirstStroke = onFirstStroke
-            self.onClear = onClear
+        init(viewModel: CanvasViewModel) {
+            self.viewModel = viewModel
         }
 
         func canvasViewDrawingDidChange(_ canvasView: PKCanvasView) {
-            drawing = canvasView.drawing
+            viewModel.drawing = canvasView.drawing
             if !hasStrokedOnce && !canvasView.drawing.strokes.isEmpty {
                 hasStrokedOnce = true
-                onFirstStroke()
+                viewModel.onFirstStroke()
             }
         }
 
-        @objc func handleClear() { onClear?() }
+        @objc func handleClear() { viewModel.clear() }
     }
 }
 

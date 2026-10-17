@@ -10,13 +10,11 @@ struct CanvasPageView: View {
     @AppStorage("pairingCode") private var pairingCode: String = ""
     @AppStorage("hasSeenClearHint") private var hasSeenClearHint: Bool = false
     @AppStorage("darkModeEnabled") private var darkModeEnabled = false
-    @AppStorage("canvasBackgroundHex") private var canvasBackgroundHex = CanvasBackground.white.rawValue
-    @AppStorage("darkCanvasBackgroundHex") private var darkCanvasBackgroundHex = CanvasBackground.charcoal.rawValue
     @AppStorage("codexRepliesExpanded") private var repliesExpanded = true
     @AppStorage("codexChatSide") private var chatSideRawValue = CanvasChatSide.right.rawValue
     @AppStorage("codexChatWidthFraction") private var chatWidthFraction = CanvasChatFrames.defaultChatFraction
     @AppStorage("codexCanvasCollapsed") private var chatFocused = false
-    @State private var vm = CanvasViewModel()
+    private var vm: CanvasViewModel { appState.canvasViewModel }
     @State private var showClearHint = false
     @State private var pickerServer: PickerServer?
     @State private var showBackgroundPicker = false
@@ -66,10 +64,7 @@ struct CanvasPageView: View {
 
     private var chatSide: CanvasChatSide { CanvasChatSide(rawValue: chatSideRawValue) ?? .right }
 
-    private var canvasBackground: CanvasBackground {
-        let hex = darkModeEnabled ? darkCanvasBackgroundHex : canvasBackgroundHex
-        return CanvasBackground(rawValue: hex) ?? (darkModeEnabled ? .charcoal : .white)
-    }
+    private var canvasBackground: CanvasBackground { vm.background }
 
     private var hasReplyPanel: Bool {
         connectionMonitor.requiresCodexThread == true || selectedTarget != nil || newChat != nil
@@ -344,13 +339,9 @@ struct CanvasPageView: View {
     }
 
     private var drawingSurface: some View {
-        ZStack {
-            CanvasView(drawing: $vm.drawing, backgroundColor: canvasBackground.uiColor, isDrawingActive: !composerFocused && !chatFocused, onFirstStroke: vm.onFirstStroke, onClear: {
-                vm.clear()
-                triggerClearHaptic()
-                hasSeenClearHint = true
-                showClearHint = false
-            })
+        @Bindable var vm = vm
+        return ZStack {
+            CanvasView(viewModel: vm, isDrawingActive: !composerFocused && !chatFocused)
                 .background(canvasBackground.color)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
@@ -391,6 +382,16 @@ struct CanvasPageView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
                 Spacer()
+                if let error = vm.storageError {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                        Button("Retry saving canvas") { vm.save() }
+                    }
+                    .font(.caption).foregroundStyle(Color.rust)
+                    .padding(12).background(Color.panelBackground, in: RoundedRectangle(cornerRadius: 12))
+                    .padding(.horizontal, 16)
+                    .accessibilityIdentifier("canvas.storageError")
+                }
                 if let connectionMessage {
                     Text(connectionMessage)
                         .font(.callout)
@@ -447,7 +448,7 @@ struct CanvasPageView: View {
         .buttonStyle(.plain)
         .accessibilityLabel("Dark mode")
         .accessibilityValue(darkModeEnabled ? "On" : "Off")
-        .accessibilityHint(darkModeEnabled ? "Switches to the light interface and its saved canvas background." : "Switches to the dark interface and its saved canvas background.")
+        .accessibilityHint(darkModeEnabled ? "Switches the interface to light mode." : "Switches the interface to dark mode.")
         .accessibilityIdentifier("canvas.darkMode")
     }
 
@@ -506,7 +507,7 @@ struct CanvasPageView: View {
                 ), supportsOpacity: false)
                 .frame(minHeight: 44)
                 .accessibilityIdentifier("canvas.backgroundCustom")
-                Text("Changes the canvas background for \(darkModeEnabled ? "dark" : "light") mode. Use the sun or moon button to change the interface.")
+                Text("This background belongs to the canvas and stays the same when the interface changes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Text("The background is included in sent drawings.")
@@ -526,11 +527,7 @@ struct CanvasPageView: View {
     }
 
     private func setCanvasBackground(_ background: CanvasBackground) {
-        if darkModeEnabled {
-            darkCanvasBackgroundHex = background.rawValue
-        } else {
-            canvasBackgroundHex = background.rawValue
-        }
+        vm.background = background
     }
 
     private func castCurrent() {
@@ -576,7 +573,7 @@ struct CanvasPageView: View {
 
     private func canvasSnapshot() -> Data? {
         guard !vm.drawing.strokes.isEmpty else { return nil }
-        return vm.drawing.exportPNG(backgroundColor: canvasBackground.uiColor)
+        return vm.snapshot()
     }
 
     private func dismissComposer() {

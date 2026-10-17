@@ -8,6 +8,7 @@ enum AppPage {
 @Observable
 @MainActor
 class AppState {
+    let canvasViewModel = CanvasViewModel()
     var currentPage: AppPage = .landing
     var selectedCodexChat: CodexChatTarget? {
         didSet {

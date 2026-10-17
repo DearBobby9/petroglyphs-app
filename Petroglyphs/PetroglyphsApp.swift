@@ -23,6 +23,7 @@ struct PetroglyphsApp: App {
             .preferredColorScheme(darkModeEnabled ? .dark : .light)
             .onChange(of: scenePhase) { _, phase in
                 connectionMonitor.setForeground(phase == .active)
+                if phase != .active { appState.canvasViewModel.save() }
             }
             .task {
                 guard connectionMonitor.serverURL == nil else { return }

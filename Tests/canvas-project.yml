@@ -1,0 +1,32 @@
+name: CanvasDocumentChecks
+settings:
+  base:
+    IPHONEOS_DEPLOYMENT_TARGET: '17.6'
+    SWIFT_VERSION: '5.0'
+    CODE_SIGNING_ALLOWED: NO
+targets:
+  CanvasDocumentTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - CanvasDocumentTests.swift
+      - CanvasBackgroundExportTests.swift
+      - ../Petroglyphs/Models
+      - ../Petroglyphs/ViewModels/CanvasViewModel.swift
+      - ../Petroglyphs/Views/CanvasView.swift
+      - ../Petroglyphs/Extensions/PKDrawing+Export.swift
+      - ../Petroglyphs/Services/CanvasExporter.swift
+      - ../Petroglyphs/Services/NetworkService.swift
+      - ../Petroglyphs/Services/BridgeTransport.swift
+      - ../Petroglyphs/Services/OfflineQueue.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bobbyjia.petroglyphs.canvastests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  CanvasDocumentChecks:
+    build:
+      targets:
+        CanvasDocumentTests: [test]
+    test:
+      targets: [CanvasDocumentTests]
