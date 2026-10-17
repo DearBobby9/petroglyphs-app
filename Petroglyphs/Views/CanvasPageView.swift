@@ -71,16 +71,13 @@ struct CanvasPageView: View {
     }
 
     private var canSend: Bool {
-        guard !vm.isCasting, !vm.drawing.strokes.isEmpty,
-              connectionMonitor.serverURL != nil,
-              let requiresThread = connectionMonitor.requiresCodexThread else { return false }
-        if requiresThread {
-            guard newChat == nil, let target = selectedTarget, target.host.canSelect, connectionMonitor.isConnected else { return false }
-            if appState.codexConversation.session(for: target).draft.modelSelection != nil,
-               !modelSettings.matches(from: target.serverURL, hostId: target.host.id, threadId: target.thread.id) { return false }
-            return modelSettings.validationMessage(for: appState.codexConversation.session(for: target).draft.modelSelection, hasImages: true) == nil
+        guard !vm.isCasting, !vm.drawing.strokes.isEmpty else { return false }
+        if hasReplyPanel {
+            if let newChat { return newChat.request == nil }
+            guard let target = selectedTarget else { return false }
+            return appState.codexConversation.session(for: target).draft.attachments.count < CodexAttachmentImporter.maximumCount
         }
-        return true
+        return connectionMonitor.serverURL != nil && connectionMonitor.requiresCodexThread == false
     }
 
     private var connectionMessage: String? {
@@ -91,7 +88,7 @@ struct CanvasPageView: View {
         if requiresThread && !connectionMonitor.isConnected {
             return "Reconnect to your Mac to send. Your drawing stays here."
         }
-        if requiresThread && newChat != nil { return "Start this chat with a text message, then send your canvas." }
+        if requiresThread && newChat != nil { return "Add a canvas snapshot to the first message." }
         if requiresThread && selectedTarget == nil {
             return "Choose a Codex chat before sending."
         }
@@ -436,7 +433,7 @@ struct CanvasPageView: View {
                             ProgressView()
                                 .tint(Color.onAccent)
                         } else {
-                            Image(systemName: "paperplane.fill")
+                            Image(systemName: hasReplyPanel ? "plus.bubble.fill" : "paperplane.fill")
                                 .font(.system(size: 24, weight: .medium))
                         }
                     }
@@ -449,8 +446,8 @@ struct CanvasPageView: View {
                 .buttonStyle(.plain)
                 .disabled(!canSend)
                 .opacity(canSend ? 1.0 : 0.5)
-                .accessibilityLabel(vm.isCasting ? "Sending drawing" : "Send drawing")
-                .accessibilityHint(connectionMonitor.requiresCodexThread == true ? "Sends to the selected Codex chat." : "Sends to the connected server.")
+                .accessibilityLabel(hasReplyPanel ? "Add canvas to message" : (vm.isCasting ? "Sending drawing" : "Send drawing"))
+                .accessibilityHint(hasReplyPanel ? "Adds a fixed snapshot. Review the complete text and images, then send once." : "Sends to the connected server.")
                 .accessibilityIdentifier("canvas.send")
                 .padding(.trailing, 16)
             }
@@ -554,21 +551,14 @@ struct CanvasPageView: View {
 
     private func castCurrent() {
         guard canSend else { return }
-        let requiresThread = connectionMonitor.requiresCodexThread == true
-        if requiresThread, let target = selectedTarget {
+        if hasReplyPanel {
             guard let data = canvasSnapshot() else { return }
-            vm.isCasting = true
-            vm.castError = nil
-            Task {
-                defer { vm.isCasting = false }
-                do {
-                    let confirmed = try await appState.codexConversation.sendDrawing(data, to: target, modelSettings: modelSettings)
-                    vm.showCastSuccess = confirmed
-                } catch {
-                    vm.castError = error.localizedDescription
-                }
-            }
-            triggerCastHaptic()
+            do {
+                let image = CodexImportedImage(data: data, name: "Canvas-\(vm.documentID)-r\(vm.revision).png", mimeType: "image/png")
+                if let newChat { try newChat.addImage(image) }
+                else if let target = selectedTarget { try appState.codexConversation.addImage(image, for: target) }
+                repliesExpanded = true
+            } catch { vm.castError = error.localizedDescription }
             return
         }
         vm.cast(
