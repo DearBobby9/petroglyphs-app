@@ -23,6 +23,7 @@ struct CodexRepliesPanel: View {
     var onConnectionSettings: () -> Void = {}
     var onCanvasFilename: () -> String = { "Canvas.png" }
     var onShowDrafts: () -> Void = {}
+    @State private var showDiagnostics = false
 
     private var session: CodexConversationSession? { target.map { store.session(for: $0) } }
 
@@ -64,6 +65,9 @@ struct CodexRepliesPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("codex.repliesPanel")
+        .sheet(isPresented: $showDiagnostics) {
+            if let target { CodexDiagnosticsSheet(target: target) }
+        }
         .environment(\.codexComposerMaximumHeight, max(110, min(280, geometry.size.height * 0.48)))
         }
     }
@@ -88,6 +92,8 @@ struct CodexRepliesPanel: View {
                 .accessibilityIdentifier("codex.refreshReplies")
                 Button("Drafts and pending", systemImage: "tray.full", action: onShowDrafts)
                 Button("Connection settings", systemImage: "network", action: onConnectionSettings)
+                Button("Bridge diagnostics", systemImage: "stethoscope") { showDiagnostics = true }
+                    .disabled(target == nil)
                 if let layoutControls { CanvasChatLayoutMenuItems(controls: layoutControls) }
             } label: {
                 Image(systemName: "ellipsis").frame(width: 44, height: 44).contentShape(Rectangle())

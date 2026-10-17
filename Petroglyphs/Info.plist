@@ -2,6 +2,8 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>PetroglyphsSourceCommit</key>
+	<string>$(PETROGLYPHS_SOURCE_COMMIT)</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Petroglyphs reconnects to your paired Mac to send drawings and read Codex replies.</string>
 	<key>NSAppTransportSecurity</key>

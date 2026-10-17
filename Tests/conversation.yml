@@ -13,6 +13,10 @@ targets:
       - CodexResultImageModelsTests.swift
       - CodexModelSettingsTests.swift
       - CodexExecutionControlTests.swift
+      - CodexDiagnosticsTests.swift
+      - ../Petroglyphs/Models/CodexBridgeDiagnostics.swift
+      - ../Petroglyphs/Services/NetworkService+Diagnostics.swift
+      - ../Petroglyphs/ViewModels/CodexDiagnosticsModel.swift
       - ../Petroglyphs/Models/CodexExecutionControl.swift
       - ../Petroglyphs/Services/NetworkService+Controls.swift
       - ../Petroglyphs/ViewModels/CodexExecutionControlModel.swift
