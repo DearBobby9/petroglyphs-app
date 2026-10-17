@@ -479,6 +479,25 @@ final class CodexConversationStoreTests: XCTestCase {
         }
     }
 
+    @MainActor
+    func testReceiptCompletesWhileHistoryRemainsUnavailableWithoutAnotherPost() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ConversationNetworkFixture()
+        let destination = target()
+        let store = CodexConversationStore(network: network, storageRoot: root)
+        store.setDraftText("One request", for: destination)
+        await store.sendDraft(to: destination)
+        await network.failHistoryAndCompleteReceipt()
+        await store.refresh(for: destination)
+        XCTAssertEqual(store.session(for: destination).outgoing.first?.state, .completed)
+        XCTAssertNotNil(store.session(for: destination).error)
+        let restored = CodexConversationStore(network: network, storageRoot: root)
+        XCTAssertEqual(restored.session(for: destination).outgoing.first?.state, .completed)
+        let requests = await network.requests
+        XCTAssertEqual(requests.count, 1)
+    }
+
     private func numberedMessages(_ numbers: ClosedRange<Int>) -> [CodexConversationMessage] {
         numbers.map { index in
             CodexConversationMessage(id: "message-\(index)", turnId: nil, clientMessageId: nil, role: "assistant", text: "Message \(index)", phase: "final_answer", createdAt: Date(timeIntervalSince1970: Double(index)), state: .completed, attachments: [])
@@ -519,6 +538,8 @@ private actor ConversationNetworkFixture: CodexConversationNetworking, CodexMode
     var receiptReadCount = 0
     private var postMode = PostMode.accepted
     private var receiptMode = ReceiptMode.accepted
+    private var historyUnavailable = false
+    private var receiptState = CodexMessageState.queued
     private var pageMessages: [CodexConversationMessage] = []
     private var pageReceipts: [CodexMessageReceipt] = []
     private var pageHost: String?
@@ -531,6 +552,7 @@ private actor ConversationNetworkFixture: CodexConversationNetworking, CodexMode
     private var modelInputModalities = ["text", "image"]
 
     func configure(post: PostMode, receipt: ReceiptMode) { postMode = post; receiptMode = receipt }
+    func failHistoryAndCompleteReceipt() { historyUnavailable = true; receiptState = .completed }
     func setModelInputModalities(_ value: [String]) { modelInputModalities = value }
     func setPage(messages: [CodexConversationMessage], host: String, receipts: [CodexMessageReceipt] = []) {
         pageMessages = messages; pageHost = host; pageReceipts = receipts
@@ -546,7 +568,8 @@ private actor ConversationNetworkFixture: CodexConversationNetworking, CodexMode
     func finishSuspendedPost() { postWaiter?.resume(); postWaiter = nil }
 
     func conversation(for key: CodexConversationKey, before: String?) async throws -> CodexConversationPage {
-        CodexConversationPage(hostId: pageHost ?? key.hostId, threadId: key.threadId, messages: before == nil ? pageMessages : olderMessages,
+        if historyUnavailable { throw NetworkService.NetworkError.server(statusCode: 503, message: "Desktop is offline") }
+        return CodexConversationPage(hostId: pageHost ?? key.hostId, threadId: key.threadId, messages: before == nil ? pageMessages : olderMessages,
                               beforeCursor: before == nil ? pageCursor : olderCursor, runState: "idle",
                               receipts: before == nil ? pageReceipts : olderReceipts, updatedAt: Date())
     }
@@ -587,6 +610,6 @@ private actor ConversationNetworkFixture: CodexConversationNetworking, CodexMode
         let message = CodexConversationMessage(id: "client:\(body.id)", turnId: nil, clientMessageId: body.id,
                                                role: "user", text: body.text, phase: "user", createdAt: Date(), state: .queued, attachments: [])
         return CodexMessageReceipt(id: body.id, hostId: key.hostId, threadId: key.threadId,
-                                   createdAt: Date(), updatedAt: Date(), state: .queued, turnId: nil, message: message, error: nil, notice: nil)
+                                   createdAt: Date(), updatedAt: Date(), state: receiptState, turnId: nil, message: message, error: nil, notice: nil)
     }
 }

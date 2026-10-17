@@ -19,6 +19,7 @@ final class CodexConversationSession {
     var hasLoaded = false
     var hasLoadedOlder = false
     var error: String?
+    var receiptError: String?
     var draftError: String?
     var stateRestorationFailed = false
     var historyRestorationFailed = false
@@ -150,7 +151,8 @@ final class CodexConversationStore {
         while !Task.isCancelled {
             await refresh(for: target)
             let session = session(for: target)
-            let interval = min(24.0, (session.isBusy || session.activeCount > 0 ? 3.0 : 8.0) * pow(2, Double(min(session.failedRefreshes, 3))))
+            let interval = session.activeCount > 0 ? 3.0
+                : min(24.0, (session.isBusy ? 3.0 : 8.0) * pow(2, Double(min(session.failedRefreshes, 3))))
             do { try await Task.sleep(for: .seconds(interval)) }
             catch { return }
         }
@@ -162,6 +164,7 @@ final class CodexConversationStore {
         session.isRefreshing = true
         session.isLoading = !session.hasLoaded && session.history.isEmpty
         defer { session.isRefreshing = false; session.isLoading = false }
+        async let receiptRefresh: Void = refreshReceipts(session)
         do {
             let page = try await network.conversation(for: session.key, before: nil)
             guard !Task.isCancelled else { return }
@@ -185,12 +188,6 @@ final class CodexConversationStore {
             session.error = nil
             session.failedRefreshes = 0
             for receipt in page.receipts { try apply(receipt, to: session) }
-            // A lost POST response is reconciled by its original ID. Reads never resend it.
-            let included = Set(page.receipts.map(\.id))
-            for item in session.outgoing where !item.state.isTerminal && item.state != .dispatching && !item.canRetry && !included.contains(item.id) {
-                await reconcile(item.id, session: session)
-                if Task.isCancelled { break }
-            }
             saveReportingFailure(session)
             try saveHistory(session)
         } catch {
@@ -198,6 +195,7 @@ final class CodexConversationStore {
             session.error = error.localizedDescription
             session.failedRefreshes += 1
         }
+        await receiptRefresh
     }
 
     func loadOlder(for target: CodexChatTarget) async {
@@ -339,6 +337,21 @@ final class CodexConversationStore {
         saveReportingFailure(session)
     }
 
+    private func refreshReceipts(_ session: CodexConversationSession) async {
+        // Receipt storage remains available while Desktop history is offline.
+        // Skip a live POST because its receipt read could outrun admission.
+        let ids = session.outgoing.filter { !$0.state.isTerminal && $0.state != .dispatching && !$0.canRetry }.map(\.id)
+        guard !ids.isEmpty else { return }
+        session.receiptError = nil
+        for id in ids {
+            guard !Task.isCancelled else { return }
+            await reconcile(id, session: session)
+            saveReportingFailure(session)
+        }
+        do { try saveHistory(session) }
+        catch { session.receiptError = "Could not save message receipts. \(error.localizedDescription)" }
+    }
+
     private func reconcile(_ id: String, session: CodexConversationSession) async {
         do {
             let receipt = try await network.messageReceipt(id, for: session.key)
@@ -351,12 +364,13 @@ final class CodexConversationStore {
                 session.outgoing[index].canRetry = true
                 session.outgoing[index].notice = nil
                 session.outgoing[index].error = "The server has not accepted this message. You can try sending it again."
-            }
+            } else { session.receiptError = error.localizedDescription }
         }
     }
 
     private func apply(_ receipt: CodexMessageReceipt, to session: CodexConversationSession) throws {
         guard receipt.hostId == session.key.hostId, receipt.threadId == session.key.threadId else { throw ConversationError.wrongDestination }
+        if let previous = session.receipts[receipt.id], previous.updatedAt > receipt.updatedAt { return }
         session.receipts[receipt.id] = receipt
         if let index = session.outgoing.firstIndex(where: { $0.id == receipt.id }) {
             session.outgoing[index].state = receipt.state
