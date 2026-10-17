@@ -229,6 +229,8 @@ private struct CodexConversationTimeline: View {
                                 .font(.caption).foregroundStyle(.secondary)
                                 .accessibilityIdentifier("chat.runState")
                         }
+                        CodexExecutionControlsView(target: target, runState: session.runState,
+                                                   latestTurnID: session.history.last?.turnId)
                         Color.clear.frame(height: 1).id(bottomID)
                     }
                     .padding(14)

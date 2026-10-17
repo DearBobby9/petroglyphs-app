@@ -11,6 +11,10 @@ targets:
     sources:
       - CodexConversationStoreTests.swift
       - CodexModelSettingsTests.swift
+      - CodexExecutionControlTests.swift
+      - ../Petroglyphs/Models/CodexExecutionControl.swift
+      - ../Petroglyphs/Services/NetworkService+Controls.swift
+      - ../Petroglyphs/ViewModels/CodexExecutionControlModel.swift
       - ../Petroglyphs/Models/CodexConversation.swift
       - ../Petroglyphs/Models/CodexProject.swift
       - ../Petroglyphs/Models/CodexModelSettings.swift
