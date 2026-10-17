@@ -32,7 +32,13 @@ extension PKDrawing {
         )
     }
 
-    func exportPNG(scale: CGFloat = 1.0, backgroundColor: UIColor = .white, exportBounds: CGRect? = nil) -> Data? {
+    func exportPNG(
+        scale: CGFloat = 1.0,
+        backgroundColor: UIColor = .white,
+        exportBounds: CGRect? = nil,
+        referenceImage: UIImage? = nil,
+        referenceBounds: CGRect? = nil
+    ) -> Data? {
         let rect = exportBounds ?? (bounds.isEmpty ? CGRect(x: 0, y: 0, width: 100, height: 100) : bounds)
         guard rect.origin.x.isFinite, rect.origin.y.isFinite,
               rect.width.isFinite, rect.height.isFinite, rect.width > 0, rect.height > 0,
@@ -48,6 +54,9 @@ extension PKDrawing {
             pngData = renderer.pngData { context in
                 backgroundColor.withAlphaComponent(1).setFill()
                 context.fill(CGRect(origin: .zero, size: image.size))
+                if let referenceImage, let referenceBounds {
+                    referenceImage.draw(in: referenceBounds.offsetBy(dx: -rect.minX, dy: -rect.minY))
+                }
                 image.draw(at: .zero)
             }
         }

@@ -16,6 +16,7 @@ targets:
       - ../Petroglyphs/Views/CanvasView.swift
       - ../Petroglyphs/Extensions/PKDrawing+Export.swift
       - ../Petroglyphs/Services/CanvasExporter.swift
+      - ../Petroglyphs/Services/CodexAttachmentImporter.swift
       - ../Petroglyphs/Services/NetworkService.swift
       - ../Petroglyphs/Services/BridgeTransport.swift
       - ../Petroglyphs/Services/OfflineQueue.swift

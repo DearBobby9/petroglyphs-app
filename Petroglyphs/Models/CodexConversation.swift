@@ -44,6 +44,7 @@ struct CodexConversationAttachment: Codable, Identifiable, Equatable {
     let byteCount: Int?
     let assetPath: String?
     var localFilename: String? = nil
+    var unavailableReason: String? = nil
 }
 
 struct CodexConversationMessage: Codable, Identifiable, Equatable {
@@ -56,10 +57,36 @@ struct CodexConversationMessage: Codable, Identifiable, Equatable {
     let createdAt: Date?
     var state: CodexMessageState
     var attachments: [CodexConversationAttachment]
+    var omittedResultImageCount: Int? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case id, turnId, clientMessageId, role, text, phase, createdAt, state, attachments
+        case omittedResultImageCount = "omittedAttachmentCount"
+    }
+
+    private enum LegacyCodingKeys: String, CodingKey { case omittedResultImageCount }
 
     // A native turn replaces its optimistic receipt without replacing the visible row.
     var displayID: String {
         role == "user" ? clientMessageId.map { "user:\($0)" } ?? id : id
+    }
+}
+
+extension CodexConversationMessage {
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(String.self, forKey: .id)
+        turnId = try values.decodeIfPresent(String.self, forKey: .turnId)
+        clientMessageId = try values.decodeIfPresent(String.self, forKey: .clientMessageId)
+        role = try values.decode(String.self, forKey: .role)
+        text = try values.decode(String.self, forKey: .text)
+        phase = try values.decode(String.self, forKey: .phase)
+        createdAt = try values.decodeIfPresent(Date.self, forKey: .createdAt)
+        state = try values.decode(CodexMessageState.self, forKey: .state)
+        attachments = try values.decode([CodexConversationAttachment].self, forKey: .attachments)
+        let legacy = try decoder.container(keyedBy: LegacyCodingKeys.self)
+        omittedResultImageCount = try values.decodeIfPresent(Int.self, forKey: .omittedResultImageCount)
+            ?? legacy.decodeIfPresent(Int.self, forKey: .omittedResultImageCount)
     }
 }
 

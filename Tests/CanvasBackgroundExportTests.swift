@@ -5,6 +5,35 @@ import UIKit
 
 final class CanvasBackgroundExportTests: XCTestCase {
     @MainActor
+    func testDocumentCompositeKeepsReferenceInkAndCropInTheSameCoordinates() throws {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let referenceBytes = UIGraphicsImageRenderer(size: CGSize(width: 120, height: 120), format: format).pngData { context in
+            UIColor.red.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 120, height: 120))
+        }
+        var document = CanvasDocument(background: .gray)
+        document.referenceImage = try CanvasDocumentReference(data: referenceBytes, name: "Reference.png", sourceID: "thread/result")
+        document.drawing = makeDrawing(ink: .black)
+        document.exportBounds = CGRect(x: 40, y: 40, width: 120, height: 120)
+        let pixels = try Pixels(data: XCTUnwrap(CanvasExporter().pngData(document: document)))
+        XCTAssertEqual(pixels.width, 120)
+        XCTAssertEqual(pixels.height, 120)
+        assertRGB(pixels.at(x: 60, y: 60), matches: .black)
+        assertRGB(pixels.at(x: 20, y: 60), matches: .red)
+        assertRGB(pixels.at(x: 100, y: 20), matches: CanvasBackground.gray.uiColor)
+    }
+
+    @MainActor
+    func testLargeExportAreaHasBoundedRasterDimensions() throws {
+        var document = CanvasDocument(background: .white)
+        document.exportBounds = CGRect(x: 0, y: 0, width: 8_192, height: 4_096)
+        let pixels = try Pixels(data: XCTUnwrap(CanvasExporter().pngData(document: document)))
+        XCTAssertEqual(pixels.width, 2_048)
+        XCTAssertEqual(pixels.height, 1_024)
+    }
+
+    @MainActor
     func testBackgroundSelectionPreservesBlackAndWhiteInkInOpaquePNG() throws {
         let backgrounds: [UIColor] = [.white, .black, UIColor(red: 58 / 255, green: 86 / 255, blue: 120 / 255, alpha: 1)]
         for ink in [UIColor.black, UIColor.white] {

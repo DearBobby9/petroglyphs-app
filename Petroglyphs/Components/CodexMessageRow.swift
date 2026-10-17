@@ -25,6 +25,13 @@ struct CodexMessageRow: View {
                         }
                     }
                 }
+                if let omittedCount = message.omittedResultImageCount, omittedCount > 0 {
+                    Label(omittedCount == 1 ? "1 additional result image is not shown." : "\(omittedCount) additional result images are not shown.",
+                          systemImage: "photo.stack")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("chat.omittedImages.\(message.displayID)")
+                }
                 if !message.text.isEmpty {
                     if isUser {
                         Text(message.text)
@@ -114,6 +121,9 @@ struct CodexMessageRow: View {
 }
 
 struct CodexMessageImage: View {
+    @Environment(AppState.self) private var appState
+    @AppStorage("codexRepliesExpanded") private var repliesExpanded = true
+    @AppStorage("codexCanvasCollapsed") private var chatFocused = false
     let attachment: CodexConversationAttachment
     let siblings: [CodexConversationAttachment]
     let target: CodexChatTarget
@@ -125,7 +135,9 @@ struct CodexMessageImage: View {
 
     var body: some View {
         Group {
-            if let image {
+            if let reason = attachment.imageUnavailableMessage {
+                imagePlaceholder("Image unavailable", detail: reason)
+            } else if let image {
                 Button { showPreview = true } label: {
                     Image(uiImage: image)
                         .resizable()
@@ -135,8 +147,6 @@ struct CodexMessageImage: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Open image: \(attachment.name)")
-            } else if attachment.availability != "available" {
-                imagePlaceholder("Image unavailable", detail: "This older image cannot be retrieved.")
             } else if error != nil {
                 Button { retryID += 1 } label: {
                     imagePlaceholder("Image could not load", detail: "Tap to try again")
@@ -149,7 +159,9 @@ struct CodexMessageImage: View {
         .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 10))
         .clipShape(RoundedRectangle(cornerRadius: 10))
         .accessibilityIdentifier("chat.attachment.\(attachment.id)")
-        .task(id: "\(CodexConversationKey(target).storageID):\(attachment.id):\(retryID)") {
+        .task(id: "\(CodexConversationKey(target).storageID):\(attachment.id):\(attachment.availability):\(retryID)") {
+            image = nil
+            error = nil
             guard attachment.availability == "available" else { return }
             do {
                 let data = try await store.imageData(attachment, for: target)
@@ -164,8 +176,16 @@ struct CodexMessageImage: View {
         }
         .sheet(isPresented: $showPreview) {
             CodexImagePreview(items: siblings.map { item in
-                CodexImagePreviewItem(id: item.id, name: item.name, load: { try await store.imageData(item, for: target) })
-            }, selectedID: attachment.id)
+                CodexImagePreviewItem(id: item.id, name: item.name, unavailableReason: item.imageUnavailableMessage,
+                                      load: { try await store.imageData(item, for: target) })
+            }, selectedID: attachment.id, onUseAsReference: { item, data in
+                try appState.canvasViewModel.setReferenceImage(data: data, name: item.name,
+                    sourceID: "chat:\(target.host.id):\(target.thread.id):attachment:\(item.id)")
+                appState.selectedCodexChat = target
+                appState.newCodexChat = nil
+                chatFocused = false
+                repliesExpanded = false
+            })
         }
     }
 
@@ -180,5 +200,22 @@ struct CodexMessageImage: View {
         .padding(8)
         .frame(maxWidth: .infinity)
         .frame(minHeight: 140)
+    }
+}
+
+private extension CodexConversationAttachment {
+    var imageUnavailableMessage: String? {
+        guard availability != "available" else { return nil }
+        switch unavailableReason {
+        case "remote_file_unsupported": return "This image is stored on the remote Mac and cannot be retrieved by this bridge."
+        case "outside_workspace": return "This image is outside the folders available to this chat."
+        case "unsupported_source": return "This image source is not supported. Import a PNG or JPEG from Files or Photos."
+        case "invalid_image": return "The result is not a valid PNG or JPEG image."
+        case "image_too_large": return "This image exceeds the 10 MB limit."
+        case "image_missing": return "The original result image could not be found."
+        case "snapshot_unavailable": return "A saved copy of this result image is unavailable."
+        case "total_size_exceeded": return "The result images exceed the 24 MB limit for one message."
+        default: return "This image cannot be retrieved."
+        }
     }
 }

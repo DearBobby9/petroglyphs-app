@@ -10,6 +10,7 @@ targets:
     platform: iOS
     sources:
       - CodexConversationStoreTests.swift
+      - CodexResultImageModelsTests.swift
       - CodexModelSettingsTests.swift
       - CodexExecutionControlTests.swift
       - ../Petroglyphs/Models/CodexExecutionControl.swift

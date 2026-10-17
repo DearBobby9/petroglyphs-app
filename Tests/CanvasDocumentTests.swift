@@ -3,6 +3,80 @@ import PencilKit
 
 final class CanvasDocumentTests: XCTestCase {
     @MainActor
+    func testReferenceImageAndSelectionPersistIndependentlyOfInk() throws {
+        let storage = temporaryStorage()
+        let model = CanvasViewModel(storageURL: storage)
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 100), format: format).pngData { context in
+            UIColor.green.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 200, height: 100))
+        }
+        try model.setReferenceImage(data: image, name: "Result.png", sourceID: "thread-1/attachment-2")
+        let reference = try XCTUnwrap(model.referenceImage)
+        model.drawing = makeDrawing()
+        let crop = CGRect(x: 10, y: 20, width: 80, height: 60)
+        try model.setExportBounds(crop)
+        let snapshot = try XCTUnwrap(model.snapshot())
+        XCTAssertEqual(UIImage(data: snapshot)?.size, crop.size)
+        model.clear()
+        XCTAssertTrue(model.drawing.strokes.isEmpty)
+        XCTAssertEqual(model.referenceImage?.data, reference.data)
+        model.undo()
+        XCTAssertEqual(model.drawing.strokes.count, 1)
+        XCTAssertEqual(model.exportBounds, crop)
+
+        let restored = CanvasViewModel(storageURL: storage)
+        XCTAssertEqual(restored.referenceImage?.sourceID, "thread-1/attachment-2")
+        XCTAssertEqual(restored.referenceImage?.name, reference.name)
+        XCTAssertEqual(restored.referenceImage?.data, reference.data)
+        XCTAssertEqual(restored.selectedExportBounds, crop)
+        XCTAssertEqual(restored.snapshot(), snapshot)
+        try restored.setReferenceImage(data: image, name: "Next result.png", sourceID: "thread-1/attachment-3")
+        XCTAssertNil(restored.selectedExportBounds, "A replacement image must not inherit the previous image's crop.")
+        XCTAssertEqual(restored.exportBounds, reference.bounds)
+        XCTAssertEqual(restored.drawing.strokes.count, 1, "Replacing the locked image preserves editable annotations.")
+        try restored.setExportBounds(crop)
+        try restored.setExportBounds(nil)
+        XCTAssertEqual(restored.exportBounds, reference.bounds)
+        restored.clearReferenceImage()
+        XCTAssertNil(restored.referenceImage)
+        XCTAssertEqual(restored.drawing.strokes.count, 1)
+    }
+
+    @MainActor
+    func testInvalidReferenceAndSelectionDoNotReplaceCurrentDocument() throws {
+        let model = CanvasViewModel(storageURL: temporaryStorage())
+        model.drawing = makeDrawing()
+        let revision = model.revision
+        let snapshot = model.snapshot()
+        XCTAssertThrowsError(try model.setReferenceImage(data: Data("invalid image".utf8), name: "bad.png", sourceID: "source"))
+        XCTAssertThrowsError(try model.setExportBounds(CGRect(x: 0, y: 0, width: 0, height: 100)))
+        XCTAssertEqual(model.revision, revision)
+        XCTAssertEqual(model.snapshot(), snapshot)
+    }
+
+    @MainActor
+    func testVersionOneDocumentLoadsWithoutReferenceOrSelection() throws {
+        var document = CanvasDocument(background: .gray)
+        document.drawing = makeDrawing()
+        document.exportBounds = document.drawing.bounds
+        var encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(document)) as? [String: Any])
+        encoded["version"] = 1
+        encoded.removeValue(forKey: "referenceImage")
+        encoded.removeValue(forKey: "selectedExportBounds")
+        let storage = temporaryStorage()
+        try JSONSerialization.data(withJSONObject: encoded).write(to: storage)
+        let model = CanvasViewModel(storageURL: storage)
+        XCTAssertNil(model.storageError)
+        XCTAssertEqual(model.documentID, document.id)
+        XCTAssertEqual(model.background, .gray)
+        XCTAssertEqual(model.drawing.strokes.count, 1)
+        XCTAssertNil(model.referenceImage)
+        XCTAssertNil(model.selectedExportBounds)
+    }
+
+    @MainActor
     func testClearRemovesInkSynchronously() {
         let model = CanvasViewModel(storageURL: temporaryStorage())
         model.drawing = makeDrawing()

@@ -8,11 +8,20 @@ struct CanvasExport {
 
 struct CanvasExporter {
     func export(document: CanvasDocument, duration: Double) throws -> CanvasExport {
-        guard let pngData = document.drawing.exportPNG(
-            backgroundColor: document.background.uiColor,
-            exportBounds: document.exportBounds
-        ) else { throw ExportError.pngFailed }
+        guard let pngData = pngData(document: document) else { throw ExportError.pngFailed }
         return CanvasExport(imageBase64: pngData.base64EncodedString(), strokeMetadata: document.drawing.extractStrokeMetadata(duration: duration))
+    }
+
+    func pngData(document: CanvasDocument) -> Data? {
+        // Limit raster allocation without changing the document coordinate system.
+        let scale = min(1, 2_048 / max(document.exportBounds.width, document.exportBounds.height))
+        return document.drawing.exportPNG(
+            scale: scale,
+            backgroundColor: document.background.uiColor,
+            exportBounds: document.exportBounds,
+            referenceImage: document.referenceImage.flatMap { UIImage(data: $0.data) },
+            referenceBounds: document.referenceImage?.bounds
+        )
     }
 
     func export(drawing: PKDrawing, duration: Double, backgroundColor: UIColor = .white) throws -> CanvasExport {

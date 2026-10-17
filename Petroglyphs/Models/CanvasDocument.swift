@@ -2,7 +2,7 @@ import Foundation
 import PencilKit
 
 struct CanvasDocument: Codable {
-    static let schemaVersion = 1
+    static let schemaVersion = 2
     static let emptyBounds = CGRect(x: 0, y: 0, width: 100, height: 100)
 
     let id: UUID
@@ -10,6 +10,14 @@ struct CanvasDocument: Codable {
     var drawing: PKDrawing
     var background: CanvasBackground
     var exportBounds: CGRect
+    var referenceImage: CanvasDocumentReference?
+    var selectedExportBounds: CGRect?
+
+    var contentBounds: CGRect {
+        var bounds = Self.isValid(drawing.bounds) ? drawing.bounds : CGRect.null
+        if let referenceImage { bounds = bounds.union(referenceImage.bounds) }
+        return Self.isValid(bounds) ? bounds : Self.emptyBounds
+    }
 
     init(background: CanvasBackground) {
         id = UUID()
@@ -17,12 +25,14 @@ struct CanvasDocument: Codable {
         drawing = PKDrawing()
         self.background = background
         exportBounds = Self.emptyBounds
+        referenceImage = nil
+        selectedExportBounds = nil
     }
 
     init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         let version = try values.decode(Int.self, forKey: .version)
-        guard version == Self.schemaVersion else { throw DocumentError.unsupportedVersion(version) }
+        guard (1...Self.schemaVersion).contains(version) else { throw DocumentError.unsupportedVersion(version) }
         id = try values.decode(UUID.self, forKey: .id)
         revision = try values.decode(Int.self, forKey: .revision)
         drawing = try PKDrawing(data: values.decode(Data.self, forKey: .drawing))
@@ -31,6 +41,10 @@ struct CanvasDocument: Codable {
         self.background = background
         exportBounds = try values.decode(CGRect.self, forKey: .exportBounds)
         guard revision >= 0, Self.isValid(exportBounds) else { throw DocumentError.invalidBounds }
+        referenceImage = try values.decodeIfPresent(CanvasDocumentReference.self, forKey: .referenceImage)
+        selectedExportBounds = try values.decodeIfPresent(CGRect.self, forKey: .selectedExportBounds)
+        if let selectedExportBounds, !Self.isValid(selectedExportBounds) { throw DocumentError.invalidBounds }
+        exportBounds = selectedExportBounds ?? contentBounds
     }
 
     func encode(to encoder: Encoder) throws {
@@ -41,6 +55,8 @@ struct CanvasDocument: Codable {
         try values.encode(drawing.dataRepresentation(), forKey: .drawing)
         try values.encode(background.rawValue, forKey: .background)
         try values.encode(exportBounds, forKey: .exportBounds)
+        try values.encodeIfPresent(referenceImage, forKey: .referenceImage)
+        try values.encodeIfPresent(selectedExportBounds, forKey: .selectedExportBounds)
     }
 
     static func isValid(_ bounds: CGRect) -> Bool {
@@ -50,7 +66,7 @@ struct CanvasDocument: Codable {
     }
 
     private enum CodingKeys: String, CodingKey {
-        case version, id, revision, drawing, background, exportBounds
+        case version, id, revision, drawing, background, exportBounds, referenceImage, selectedExportBounds
     }
 
     enum DocumentError: LocalizedError {

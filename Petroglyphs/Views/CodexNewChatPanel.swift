@@ -12,6 +12,7 @@ struct CodexNewChatPanel: View {
     let onFocusChanged: (Bool) -> Void
     let onCreated: (CodexThread) -> Void
     let onAddCanvas: () -> Data?
+    let onCanvasFilename: () -> String
     @Environment(\.codexComposerMaximumHeight) private var maximumComposerHeight
     @State private var attachmentNotice: String?
     @State private var isImporting = false
@@ -264,7 +265,7 @@ struct CodexNewChatPanel: View {
                 if let reason = attachmentUnavailableReason { attachmentNotice = reason; return }
                 guard let data = onAddCanvas() else { attachmentNotice = "Add content to the canvas first."; return }
                 do {
-                    try model.addImage(CodexImportedImage(data: data, name: "Canvas.png", mimeType: "image/png"))
+                    try model.addImage(CodexImportedImage(data: data, name: onCanvasFilename(), mimeType: "image/png"))
                     model.validateDestination(using: modelSettings)
                 } catch { attachmentNotice = error.localizedDescription }
             }

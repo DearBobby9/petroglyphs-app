@@ -29,6 +29,10 @@ final class CanvasViewModel {
     var documentID: UUID { document.id }
     var revision: Int { document.revision }
     var exportBounds: CGRect { document.exportBounds }
+    var contentBounds: CGRect { document.contentBounds }
+    var referenceImage: CanvasDocumentReference? { document.referenceImage }
+    var selectedExportBounds: CGRect? { document.selectedExportBounds }
+    var hasContent: Bool { !drawing.strokes.isEmpty || referenceImage != nil }
     var snapshotFilename: String { "canvas-\(documentID.uuidString.lowercased())-r\(revision).png" }
     var canUndo: Bool { !undoDrawings.isEmpty }
     var canRedo: Bool { !redoDrawings.isEmpty }
@@ -77,7 +81,34 @@ final class CanvasViewModel {
     }
 
     func snapshot() -> Data? {
-        document.drawing.exportPNG(backgroundColor: document.background.uiColor, exportBounds: document.exportBounds)
+        exporter.pngData(document: document)
+    }
+
+    func setReferenceImage(data: Data, name: String, sourceID: String) throws {
+        let reference = try CanvasDocumentReference(data: data, name: name, sourceID: sourceID)
+        document.referenceImage = reference
+        document.selectedExportBounds = nil
+        refreshExportBounds()
+        documentChanged()
+    }
+
+    func clearReferenceImage() {
+        guard referenceImage != nil else { return }
+        document.referenceImage = nil
+        refreshExportBounds()
+        documentChanged()
+    }
+
+    func setExportBounds(_ bounds: CGRect?) throws {
+        if let bounds, !CanvasDocument.isValid(bounds) { throw CanvasDocument.DocumentError.invalidBounds }
+        guard bounds != document.selectedExportBounds else { return }
+        document.selectedExportBounds = bounds
+        refreshExportBounds()
+        documentChanged()
+    }
+
+    private func refreshExportBounds() {
+        document.exportBounds = document.selectedExportBounds ?? document.contentBounds
     }
 
     private func documentChanged(saveImmediately: Bool = true) {
@@ -114,7 +145,7 @@ final class CanvasViewModel {
 
     private func replaceDrawing(_ drawing: PKDrawing, saveImmediately: Bool = true) {
         document.drawing = drawing
-        document.exportBounds = CanvasDocument.isValid(drawing.bounds) ? drawing.bounds : CanvasDocument.emptyBounds
+        refreshExportBounds()
         if !drawing.strokes.isEmpty { onFirstStroke() }
         documentChanged(saveImmediately: saveImmediately)
     }
@@ -137,7 +168,7 @@ final class CanvasViewModel {
         backgroundColor: UIColor = .white,
         onSubmission: ((SubmissionResponse, SubmissionPayload) -> Void)? = nil
     ) {
-        guard !isCasting, !drawing.strokes.isEmpty else { return }
+        guard !isCasting, hasContent else { return }
         if requiresCodexThread {
             guard let codexTarget, !codexTarget.thread.id.isEmpty, codexTarget.serverURL == serverURL else {
                 castError = "Choose a Codex chat before sending."

@@ -1,5 +1,7 @@
 import SwiftUI
 import PencilKit
+import PhotosUI
+import UniformTypeIdentifiers
 
 struct CanvasPageView: View {
     @Environment(AppState.self) var appState
@@ -14,6 +16,11 @@ struct CanvasPageView: View {
     @AppStorage("codexChatWidthFraction") private var chatWidthFraction = CanvasChatFrames.defaultChatFraction
     @AppStorage("codexCanvasCollapsed") private var chatFocused = false
     private var vm: CanvasViewModel { appState.canvasViewModel }
+    @State private var showReferenceFiles = false
+    @State private var showReferencePhotos = false
+    @State private var referencePhoto: PhotosPickerItem?
+    @State private var isSelectingExportBounds = false
+    @State private var canvasPreviewItem: CodexImagePreviewItem?
     @State private var showConnectionSettings = false
     @State private var showSavedDrafts = false
     @State private var pickerServer: PickerServer?
@@ -72,7 +79,7 @@ struct CanvasPageView: View {
     }
 
     private var canSend: Bool {
-        guard !vm.isCasting, !vm.drawing.strokes.isEmpty else { return false }
+        guard !vm.isCasting, vm.hasContent else { return false }
         if hasReplyPanel {
             if let newChat {
                 return newChat.request == nil && newChat.project.supportsFirstMessageAttachments
@@ -180,6 +187,7 @@ struct CanvasPageView: View {
                                 layoutControls: controls,
                                 reservesTopTrailingControl: chatFillsPage || (useSidebar && chatSide == .right),
                                 onConnectionSettings: { showConnectionSettings = true },
+                                onCanvasFilename: { vm.snapshotFilename },
                                 onShowDrafts: { appState.refreshCreationDrafts(); showSavedDrafts = true }
                             )
                         }
@@ -264,6 +272,29 @@ struct CanvasPageView: View {
                                       else { appState.startNewChat(project: project, host: host, serverURL: server.url) }
                                   })
                 .presentationDetents([.large])
+        }
+        .photosPicker(isPresented: $showReferencePhotos, selection: $referencePhoto, matching: .images)
+        .onChange(of: referencePhoto) { _, photo in
+            guard let photo else { return }
+            Task {
+                defer { referencePhoto = nil }
+                do {
+                    guard let data = try await photo.loadTransferable(type: Data.self) else { throw CodexAttachmentImporter.ImportError.unsupported }
+                    try vm.setReferenceImage(data: data, name: "Imported photo", sourceID: "photo:\(UUID().uuidString.lowercased())")
+                } catch { vm.castError = error.localizedDescription }
+            }
+        }
+        .fileImporter(isPresented: $showReferenceFiles, allowedContentTypes: [.png, .jpeg]) { result in
+            do {
+                let url = try result.get()
+                let access = url.startAccessingSecurityScopedResource()
+                defer { if access { url.stopAccessingSecurityScopedResource() } }
+                try vm.setReferenceImage(data: Data(contentsOf: url), name: url.lastPathComponent,
+                                         sourceID: "file:\(url.lastPathComponent)")
+            } catch { vm.castError = error.localizedDescription }
+        }
+        .sheet(item: $canvasPreviewItem) { item in
+            CodexImagePreview(items: [item], selectedID: item.id)
         }
         .sheet(isPresented: $showConnectionSettings) { ServerSettingsSheet() }
         .sheet(isPresented: $showSavedDrafts) {
@@ -357,7 +388,9 @@ struct CanvasPageView: View {
     private var drawingSurface: some View {
         @Bindable var vm = vm
         return ZStack {
-            CanvasView(viewModel: vm, isDrawingActive: !composerFocused && !chatFocused)
+            CanvasView(viewModel: vm, isDrawingActive: !composerFocused && !chatFocused,
+                       isSelectingExportBounds: isSelectingExportBounds,
+                       onExportBoundsSelected: { isSelectingExportBounds = false })
                 .background(canvasBackground.color)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
@@ -402,6 +435,27 @@ struct CanvasPageView: View {
                         }
                         .disabled(vm.drawing.strokes.isEmpty)
                         Text("Undo is available while this app stays open. Saved ink is restored after restart.")
+                        Section("Reference image") {
+                            Button("Import result image", systemImage: "folder") { showReferenceFiles = true }
+                            Button("Choose photo", systemImage: "photo") { showReferencePhotos = true }
+                            if let reference = vm.referenceImage {
+                                Text("Locked reference: \(reference.name)")
+                                Button("Remove reference image", systemImage: "photo.badge.minus", role: .destructive) { vm.clearReferenceImage() }
+                            }
+                        }
+                        Section("Export area") {
+                            Button("Select area", systemImage: "viewfinder") { isSelectingExportBounds = true }
+                                .disabled(!vm.hasContent)
+                            Button("Full canvas", systemImage: "arrow.up.left.and.arrow.down.right") {
+                                do { try vm.setExportBounds(nil) } catch { vm.castError = error.localizedDescription }
+                            }
+                            .disabled(vm.selectedExportBounds == nil)
+                            Button("Preview snapshot", systemImage: "magnifyingglass") {
+                                guard let data = vm.snapshot() else { return }
+                                canvasPreviewItem = CodexImagePreviewItem(id: UUID().uuidString, name: vm.snapshotFilename, load: { data })
+                            }
+                            .disabled(!vm.hasContent)
+                        }
                     } label: {
                         Image(systemName: "pencil.and.outline").frame(width: 44, height: 44)
                             .background(Color.sandstone.opacity(0.9), in: Circle())
@@ -422,6 +476,14 @@ struct CanvasPageView: View {
                 .padding(.horizontal, 16)
                 .padding(.top, 16)
                 Spacer()
+                if isSelectingExportBounds {
+                    HStack {
+                        Text("Drag over the canvas to select the snapshot area.").font(.caption)
+                        Button("Cancel") { isSelectingExportBounds = false }.frame(minHeight: 44)
+                    }
+                    .padding(8).background(Color.panelBackground, in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal, 16)
+                }
                 if let error = vm.storageError {
                     VStack(alignment: .leading, spacing: 6) {
                         Label(error, systemImage: "exclamationmark.triangle")
@@ -575,7 +637,7 @@ struct CanvasPageView: View {
         if hasReplyPanel {
             guard let data = canvasSnapshot() else { return }
             do {
-                let image = CodexImportedImage(data: data, name: "Canvas-\(vm.documentID)-r\(vm.revision).png", mimeType: "image/png")
+                let image = CodexImportedImage(data: data, name: vm.snapshotFilename, mimeType: "image/png")
                 if let newChat { try newChat.addImage(image) }
                 else if let target = selectedTarget { try appState.codexConversation.addImage(image, for: target) }
                 repliesExpanded = true
@@ -605,7 +667,7 @@ struct CanvasPageView: View {
     }
 
     private func canvasSnapshot() -> Data? {
-        guard !vm.drawing.strokes.isEmpty else { return nil }
+        guard vm.hasContent else { return nil }
         return vm.snapshot()
     }
 

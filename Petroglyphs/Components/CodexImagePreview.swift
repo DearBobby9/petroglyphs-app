@@ -4,7 +4,15 @@ import UIKit
 struct CodexImagePreviewItem: Identifiable {
     let id: String
     let name: String
+    let unavailableReason: String?
     let load: () async throws -> Data
+
+    init(id: String, name: String, unavailableReason: String? = nil, load: @escaping () async throws -> Data) {
+        self.id = id
+        self.name = name
+        self.unavailableReason = unavailableReason
+        self.load = load
+    }
 }
 
 struct CodexImagePreview: View {
@@ -12,14 +20,20 @@ struct CodexImagePreview: View {
     @State private var items: [CodexImagePreviewItem]
     @State private var selection: String
     let onRemove: ((String) -> Void)?
+    let onUseAsReference: ((CodexImagePreviewItem, Data) throws -> Void)?
+    @State private var isUsingReference = false
+    @State private var referenceError: String?
 
-    init(items: [CodexImagePreviewItem], selectedID: String, onRemove: ((String) -> Void)? = nil) {
+    init(items: [CodexImagePreviewItem], selectedID: String, onRemove: ((String) -> Void)? = nil,
+         onUseAsReference: ((CodexImagePreviewItem, Data) throws -> Void)? = nil) {
         _items = State(initialValue: items)
         _selection = State(initialValue: selectedID)
         self.onRemove = onRemove
+        self.onUseAsReference = onUseAsReference
     }
 
     private var selectedIndex: Int { items.firstIndex { $0.id == selection } ?? 0 }
+    private var selectedItem: CodexImagePreviewItem? { items.first { $0.id == selection } }
 
     var body: some View {
         NavigationStack {
@@ -44,7 +58,28 @@ struct CodexImagePreview: View {
                 }
                 .font(.callout).padding(12).background(.regularMaterial)
             }
+            .alert("Could not use reference image", isPresented: Binding(get: { referenceError != nil }, set: { if !$0 { referenceError = nil } })) {
+                Button("OK", role: .cancel) { referenceError = nil }
+            } message: { Text(referenceError ?? "") }
             .toolbar {
+                if let onUseAsReference {
+                    ToolbarItem(placement: .primaryAction) {
+                        Button(isUsingReference ? "Loading image…" : "Annotate on canvas", systemImage: "pencil.tip.crop.circle") {
+                            guard let selected = selectedItem, selected.unavailableReason == nil else { return }
+                            isUsingReference = true
+                            Task {
+                                defer { isUsingReference = false }
+                                do {
+                                    let data = try await selected.load()
+                                    try onUseAsReference(selected, data)
+                                    dismiss()
+                                } catch { referenceError = error.localizedDescription }
+                            }
+                        }
+                        .disabled(isUsingReference || selectedItem == nil || selectedItem?.unavailableReason != nil)
+                        .accessibilityIdentifier("chat.annotateImage")
+                    }
+                }
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
                 if let onRemove {
                     ToolbarItem(placement: .cancellationAction) {
@@ -69,12 +104,16 @@ private struct CodexImagePreviewPage: View {
 
     var body: some View {
         Group {
-            if let image { CodexZoomableImage(image: image).accessibilityLabel(item.name) }
+            if let reason = item.unavailableReason {
+                ContentUnavailableView("Image unavailable", systemImage: "photo", description: Text(reason))
+            }
+            else if let image { CodexZoomableImage(image: image).accessibilityLabel(item.name) }
             else if let error { ContentUnavailableView("Image unavailable", systemImage: "photo", description: Text(error)) }
             else { ProgressView("Loading image…") }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task(id: item.id) {
+            guard item.unavailableReason == nil else { return }
             do {
                 let bytes = try await item.load()
                 guard !Task.isCancelled else { return }

@@ -21,6 +21,7 @@ struct CodexRepliesPanel: View {
     var layoutControls: CanvasChatLayoutControls? = nil
     var reservesTopTrailingControl = false
     var onConnectionSettings: () -> Void = {}
+    var onCanvasFilename: () -> String = { "Canvas.png" }
     var onShowDrafts: () -> Void = {}
 
     private var session: CodexConversationSession? { target.map { store.session(for: $0) } }
@@ -34,7 +35,7 @@ struct CodexRepliesPanel: View {
                 CodexNewChatPanel(model: newChat, modelSettings: modelSettings, isConnected: isConnected,
                                   onCancel: onCancelNewChat, onChooseDestination: onNewChat,
                                   onRefreshModels: onRefreshModels, onFocusChanged: onComposerFocusChanged,
-                                  onCreated: { onCreated($0, newChat) }, onAddCanvas: onAddCanvas)
+                                  onCreated: { onCreated($0, newChat) }, onAddCanvas: onAddCanvas, onCanvasFilename: onCanvasFilename)
                     .id(newChat.draftID)
             } else if let target, let session {
                 chatContents(target: target, session: session)
@@ -157,7 +158,7 @@ struct CodexRepliesPanel: View {
             CodexMessageComposer(store: store, target: target, session: session,
                                  canSend: canSend, onAddCanvas: onAddCanvas,
                                  onFocusChanged: onComposerFocusChanged,
-                                 modelSettings: modelSettings, onRefreshModels: onRefreshModels)
+                                 modelSettings: modelSettings, onRefreshModels: onRefreshModels, onCanvasFilename: onCanvasFilename)
                 .chatChromeHeight("composer")
         }
     }
@@ -387,6 +388,7 @@ private struct CodexMessageComposer: View {
     let onFocusChanged: (Bool) -> Void
     let modelSettings: CodexModelSettingsModel
     let onRefreshModels: () -> Void
+    let onCanvasFilename: () -> String
     @State private var previewAttachment: CodexDraftAttachment?
     @State private var showPhotos = false
     @State private var showFiles = false
@@ -532,7 +534,7 @@ private struct CodexMessageComposer: View {
                     session.draftError = "Draw something on the canvas before adding it."
                     return
                 }
-                do { try store.addImage(CodexImportedImage(data: data, name: "Canvas.png", mimeType: "image/png"), for: target) }
+                do { try store.addImage(CodexImportedImage(data: data, name: onCanvasFilename(), mimeType: "image/png"), for: target) }
                 catch { session.draftError = error.localizedDescription }
             } label: { Label("Add current canvas", systemImage: "pencil.tip.crop.circle.badge.plus") }
                 .accessibilityIdentifier("chat.attachCanvas")
