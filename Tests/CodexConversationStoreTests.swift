@@ -596,6 +596,52 @@ final class CodexConversationStoreTests: XCTestCase {
         XCTAssertEqual(restored.localMessage(original.id, for: destination)?.canRetry, false)
     }
 
+    @MainActor
+    func testStalePaginationCannotBridgeAGapAndCorrectCursorLoadsAllMessages() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = target()
+        let network = ConversationNetworkFixture()
+        let store = CodexConversationStore(network: network, storageRoot: root)
+        await network.setPages(latest: numberedMessages(51...100), before: "50", older: numberedMessages(1...50), olderBefore: nil)
+        await store.refresh(for: destination)
+        await network.suspendOlderPage()
+        let oldPage = Task { await store.loadOlder(for: destination) }
+        await network.waitForOlderPage()
+        await network.setPages(latest: numberedMessages(101...150), before: "100", older: numberedMessages(51...100), olderBefore: "50")
+        await store.refresh(for: destination)
+        await network.finishOlderPage()
+        await oldPage.value
+        XCTAssertEqual(store.session(for: destination).history.map(\.id), (101...150).map { "message-\($0)" })
+        XCTAssertEqual(store.session(for: destination).beforeCursor, "100")
+        await store.loadOlder(for: destination)
+        await network.setPages(latest: numberedMessages(101...150), before: "100", older: numberedMessages(1...50), olderBefore: nil)
+        await store.loadOlder(for: destination)
+        XCTAssertEqual(store.session(for: destination).history.map(\.id), (1...150).map { "message-\($0)" })
+        let restored = CodexConversationStore(network: network, storageRoot: root)
+        XCTAssertEqual(restored.session(for: destination).history.map(\.id), (1...150).map { "message-\($0)" })
+    }
+
+    @MainActor
+    func testOverlappingRefreshDoesNotInvalidateUsefulPagination() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = target()
+        let network = ConversationNetworkFixture()
+        let store = CodexConversationStore(network: network, storageRoot: root)
+        await network.setPages(latest: numberedMessages(51...100), before: "50", older: numberedMessages(1...50), olderBefore: nil)
+        await store.refresh(for: destination)
+        await network.suspendOlderPage()
+        let older = Task { await store.loadOlder(for: destination) }
+        await network.waitForOlderPage()
+        await network.setPages(latest: numberedMessages(76...125), before: "75", older: [], olderBefore: nil)
+        await store.refresh(for: destination)
+        await network.finishOlderPage()
+        await older.value
+        XCTAssertEqual(store.session(for: destination).history.map(\.id), (1...125).map { "message-\($0)" })
+        XCTAssertNil(store.session(for: destination).beforeCursor)
+    }
+
     private func numberedMessages(_ numbers: ClosedRange<Int>) -> [CodexConversationMessage] {
         numbers.map { index in
             CodexConversationMessage(id: "message-\(index)", turnId: nil, clientMessageId: nil, role: "assistant", text: "Message \(index)", phase: "final_answer", createdAt: Date(timeIntervalSince1970: Double(index)), state: .completed, attachments: [])
@@ -649,6 +695,9 @@ private actor ConversationNetworkFixture: CodexConversationNetworking, CodexMode
     private var olderReceipts: [CodexMessageReceipt] = []
     private var olderCursor: String?
     private var requestWaiter: CheckedContinuation<Void, Never>?
+    private var suspendOlder = false
+    private var olderEntered: CheckedContinuation<Void, Never>?
+    private var olderGate: CheckedContinuation<Void, Never>?
     private var postWaiter: CheckedContinuation<Void, Never>?
     private var modelInputModalities = ["text", "image"]
 
@@ -670,11 +719,26 @@ private actor ConversationNetworkFixture: CodexConversationNetworking, CodexMode
     }
     func finishSuspendedPost() { postWaiter?.resume(); postWaiter = nil }
 
+    func suspendOlderPage() { suspendOlder = true }
+    func waitForOlderPage() async {
+        if olderGate != nil { return }
+        await withCheckedContinuation { olderEntered = $0 }
+    }
+    func finishOlderPage() { suspendOlder = false; olderGate?.resume(); olderGate = nil }
+
     func conversation(for key: CodexConversationKey, before: String?) async throws -> CodexConversationPage {
         if historyUnavailable { throw NetworkService.NetworkError.server(statusCode: 503, message: "Desktop is offline") }
-        return CodexConversationPage(hostId: pageHost ?? key.hostId, threadId: key.threadId, messages: before == nil ? pageMessages : olderMessages,
+        let result = CodexConversationPage(hostId: pageHost ?? key.hostId, threadId: key.threadId, messages: before == nil ? pageMessages : olderMessages,
                               beforeCursor: before == nil ? pageCursor : olderCursor, runState: "idle",
                               receipts: before == nil ? pageReceipts : olderReceipts, updatedAt: Date())
+        if before != nil && suspendOlder {
+            await withCheckedContinuation { continuation in
+                olderGate = continuation
+                olderEntered?.resume()
+                olderEntered = nil
+            }
+        }
+        return result
     }
     func sendMessage(_ body: CodexMessageRequest, for key: CodexConversationKey) async throws -> CodexMessageReceipt {
         requests.append(body)

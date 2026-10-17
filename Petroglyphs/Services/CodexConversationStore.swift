@@ -19,6 +19,7 @@ final class CodexConversationSession {
     var queueActionID: String?
     var hasLoaded = false
     var hasLoadedOlder = false
+    var historyGeneration = 0
     var error: String?
     var receiptError: String?
     var draftError: String?
@@ -176,6 +177,7 @@ final class CodexConversationStore {
                let overlap = session.history.firstIndex(where: { $0.displayID == firstID }) {
                 session.history = Array(session.history[..<overlap]) + page.messages
             } else {
+                session.historyGeneration += 1
                 session.history = page.messages
                 session.beforeCursor = page.beforeCursor
                 session.hasLoadedOlder = false
@@ -202,11 +204,13 @@ final class CodexConversationStore {
     func loadOlder(for target: CodexChatTarget) async {
         let session = session(for: target)
         guard let cursor = session.beforeCursor, !session.isLoadingOlder else { return }
+        let generation = session.historyGeneration
         session.isLoadingOlder = true
         defer { session.isLoadingOlder = false }
         do {
             let page = try await network.conversation(for: session.key, before: cursor)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, session.historyGeneration == generation,
+                  session.beforeCursor == cursor else { return }
             try validate(page, for: session.key)
             let known = Set(session.history.map(\.displayID))
             session.history = page.messages.filter { !known.contains($0.displayID) } + session.history
@@ -218,7 +222,9 @@ final class CodexConversationStore {
             try saveHistory(session)
         } catch {
             guard !Task.isCancelled else { return }
+            guard session.historyGeneration == generation, session.beforeCursor == cursor else { return }
             if case NetworkService.NetworkError.server(let code, _) = error, code == 409 {
+                session.historyGeneration += 1
                 session.history = []
                 session.hasLoadedOlder = false
                 session.beforeCursor = nil
