@@ -85,6 +85,14 @@ struct CanvasChatFrames {
         min(min(520, max(300, availableHeight * 0.43)), max(0, availableHeight - 160 - stackedSpacing))
     }
 
+    static func supportsStacked(in availableHeight: CGFloat, chatMinimumHeight: CGFloat) -> Bool {
+        availableHeight >= 160 + stackedSpacing + max(360, chatMinimumHeight)
+    }
+
+    static func stackedHeight(in availableHeight: CGFloat, chatMinimumHeight: CGFloat) -> CGFloat {
+        min(max(preferredStackedHeight(in: availableHeight), chatMinimumHeight), max(0, availableHeight - 160 - stackedSpacing))
+    }
+
     init(size: CGSize, mode: CanvasChatLayoutMode, side: CanvasChatSide, chatExtent: CGFloat) {
         let width = max(0, size.width)
         let height = max(0, size.height)

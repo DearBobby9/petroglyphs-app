@@ -2,6 +2,13 @@ import XCTest
 import SwiftUI
 
 final class CanvasChatLayoutTests: XCTestCase {
+    func testStackedLayoutRequiresRoomForMeasuredComposerAndReadableHistory() {
+        XCTAssertFalse(CanvasChatFrames.supportsStacked(in: 476, chatMinimumHeight: 420))
+        XCTAssertTrue(CanvasChatFrames.supportsStacked(in: 800, chatMinimumHeight: 420))
+        XCTAssertFalse(CanvasChatFrames.supportsStacked(in: 800, chatMinimumHeight: 700))
+        XCTAssertEqual(CanvasChatFrames.stackedHeight(in: 800, chatMinimumHeight: 510), 510)
+        XCTAssertLessThanOrEqual(CanvasChatFrames.stackedHeight(in: 800, chatMinimumHeight: 700), 628)
+    }
     func testSidebarUsesANarrowVisualGapAndCollapsesWithoutAnEmptyRail() {
         for side in CanvasChatSide.allCases {
             let open = CanvasChatFrames(size: CGSize(width: 1_334, height: 900), mode: .sideBySide,

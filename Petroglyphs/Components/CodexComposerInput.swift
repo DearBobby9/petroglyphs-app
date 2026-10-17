@@ -39,7 +39,7 @@ struct CodexComposerInput: UIViewRepresentable {
     func sizeThatFits(_ proposal: ProposedViewSize, uiView: ImagePastingTextView, context: Context) -> CGSize? {
         guard let width = proposal.width, width > 0 else { return nil }
         let desired = uiView.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
-        let maximum = UIFont.preferredFont(forTextStyle: .body).lineHeight * 5 + 20
+        let maximum = min(140, UIFont.preferredFont(forTextStyle: .body).lineHeight * 5 + 20)
         let height = min(max(44, desired), maximum)
         uiView.isScrollEnabled = desired > maximum
         return CGSize(width: width, height: height)

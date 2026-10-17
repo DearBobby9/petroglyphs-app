@@ -21,6 +21,7 @@ struct CanvasPageView: View {
     @State private var pickerServer: PickerServer?
     @State private var showBackgroundPicker = false
     @State private var composerFocused = false
+    @State private var chatMinimumHeight: CGFloat = 360
     @State private var resizingChatExtent: CGFloat?
     @State private var modelSettings = CodexModelSettingsModel()
     @State private var modelSettingsRefreshID = 0
@@ -114,9 +115,10 @@ struct CanvasPageView: View {
             Color.limestone.ignoresSafeArea()
             GeometryReader { geometry in
                 let useSidebar = CanvasChatFrames.supportsSideBySide(in: geometry.size, accessibilityText: dynamicTypeSize.isAccessibilitySize)
-                let chatFillsPage = hasReplyPanel && repliesExpanded && chatFocused
                 let availableSize = CGSize(width: max(0, geometry.size.width - 32), height: max(0, geometry.size.height - 24))
-                let stackedChatHeight = CanvasChatFrames.preferredStackedHeight(in: availableSize.height)
+                let compactWorkspace = !useSidebar && !CanvasChatFrames.supportsStacked(in: availableSize.height, chatMinimumHeight: chatMinimumHeight)
+                let chatFillsPage = hasReplyPanel && repliesExpanded && (chatFocused || compactWorkspace)
+                let stackedChatHeight = CanvasChatFrames.stackedHeight(in: availableSize.height, chatMinimumHeight: chatMinimumHeight)
                 let mode: CanvasChatLayoutMode = !hasReplyPanel ? .canvasOnly : (useSidebar ? .sideBySide : .stacked)
                 let canResize = hasReplyPanel && useSidebar && repliesExpanded && !chatFillsPage
                 let controls = layoutControls(availableWidth: availableSize.width, canResize: canResize)
@@ -147,7 +149,7 @@ struct CanvasPageView: View {
                         .accessibilityHidden(!canResize)
                     if hasReplyPanel {
                         CanvasChatPane(minimumWidth: useSidebar ? CanvasChatFrames.minimumChatWidth : 0,
-                                       minimumHeight: useSidebar ? 0 : stackedChatHeight,
+                                       minimumHeight: 0,
                                        alignment: chatSide == .left ? .leading : .trailing) {
                             CodexRepliesPanel(
                                 store: appState.codexConversation,
@@ -190,13 +192,24 @@ struct CanvasPageView: View {
                 .coordinateSpace(name: "canvas-chat-workspace")
                 .clipped()
                 .overlay(alignment: .topTrailing) {
-                    if hasReplyPanel { chatVisibilityControl.padding(16) }
+                    if hasReplyPanel {
+                        if compactWorkspace {
+                            Button(repliesExpanded ? "Canvas" : "Chat", systemImage: repliesExpanded ? "pencil.tip" : "bubble.left.and.bubble.right", action: toggleReplies)
+                                .buttonStyle(.borderedProminent).tint(Color.ochre)
+                                .frame(minHeight: 44).padding(12)
+                                .accessibilityIdentifier("canvas.compactMode")
+                        } else { chatVisibilityControl.padding(16) }
+                    }
                 }
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("canvas.workspace")
                 .accessibilityValue("Chat on \(chatSide.rawValue), \(chatFillsPage ? "canvas hidden" : (repliesExpanded ? "split" : "chat hidden"))")
                 .onChange(of: availableSize.width) { _, _ in resizingChatExtent = nil }
                 .onChange(of: useSidebar) { _, _ in resizingChatExtent = nil }
+                .onPreferenceChange(CodexChatChromeHeightKey.self) { heights in
+                    let readingHeight: CGFloat = dynamicTypeSize.isAccessibilitySize ? 180 : 120
+                    chatMinimumHeight = max(360, heights.values.reduce(0, +) + readingHeight)
+                }
                 .padding(.vertical, 12)
                 .padding(.horizontal, 16)
             }

@@ -9,6 +9,7 @@ struct CodexNewChatPanel: View {
     let onRefreshModels: () -> Void
     let onFocusChanged: (Bool) -> Void
     let onCreated: (CodexThread) -> Void
+    @Environment(\.codexComposerMaximumHeight) private var maximumComposerHeight
     @State private var attachmentNotice: String?
 
     private var canSubmit: Bool {
@@ -130,6 +131,7 @@ struct CodexNewChatPanel: View {
             .scrollDismissesKeyboard(.interactively)
             .frame(maxHeight: .infinity)
             Divider()
+            CodexComposerScroll(maximumHeight: maximumComposerHeight) {
             VStack(alignment: .leading, spacing: 8) {
                 CodexComposerCard(text: $model.prompt, canSubmit: canSubmit, isEditable: model.request == nil,
                                   isNewChat: true, sendLabel: "Start chat",
@@ -152,6 +154,8 @@ struct CodexNewChatPanel: View {
                 if model.prompt.utf16.count > 20_000 { Text("Message is over the 20,000-character limit.").font(.caption).foregroundStyle(Color.rust) }
             }
             .padding(12)
+            }
+            .chatChromeHeight("composer")
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat.newDraft")

@@ -24,8 +24,9 @@ struct CodexRepliesPanel: View {
     private var session: CodexConversationSession? { target.map { store.session(for: $0) } }
 
     var body: some View {
+        GeometryReader { geometry in
         VStack(spacing: 0) {
-            header
+            header.chatChromeHeight("header")
             Divider()
             if let newChat {
                 CodexNewChatPanel(model: newChat, modelSettings: modelSettings, isConnected: isConnected,
@@ -60,6 +61,8 @@ struct CodexRepliesPanel: View {
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("codex.repliesPanel")
+        .environment(\.codexComposerMaximumHeight, max(110, min(280, geometry.size.height * 0.48)))
+        }
     }
 
     private var header: some View {
@@ -98,7 +101,7 @@ struct CodexRepliesPanel: View {
         }
         .padding(.leading, 14)
         .padding(.trailing, reservesTopTrailingControl ? 68 : 12)
-        .padding(.vertical, 16)
+        .padding(.vertical, 8)
     }
 
     private func chatContents(target: CodexChatTarget, session: CodexConversationSession) -> some View {
@@ -130,6 +133,7 @@ struct CodexRepliesPanel: View {
                 .accessibilityIdentifier("chat.newChat")
                 .padding(.trailing, 8)
             }
+            .chatChromeHeight("destination")
 
             if let error = session.error {
                 HStack(alignment: .top, spacing: 8) {
@@ -140,6 +144,7 @@ struct CodexRepliesPanel: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 14).padding(.vertical, 8)
                 .accessibilityIdentifier("chat.loadError")
+                .chatChromeHeight("error")
             }
             Divider()
             CodexConversationTimeline(store: store, target: target, session: session)
@@ -149,6 +154,7 @@ struct CodexRepliesPanel: View {
                                  canSend: canSend, onAddCanvas: onAddCanvas,
                                  onFocusChanged: onComposerFocusChanged,
                                  modelSettings: modelSettings, onRefreshModels: onRefreshModels)
+                .chatChromeHeight("composer")
         }
     }
 }
@@ -305,6 +311,7 @@ private struct ConversationBottomKey: PreferenceKey {
 }
 
 private struct CodexMessageComposer: View {
+    @Environment(\.codexComposerMaximumHeight) private var maximumHeight
     let store: CodexConversationStore
     let target: CodexChatTarget
     let session: CodexConversationSession
@@ -325,6 +332,7 @@ private struct CodexMessageComposer: View {
     }
 
     var body: some View {
+        CodexComposerScroll(maximumHeight: maximumHeight) {
         VStack(alignment: .leading, spacing: 8) {
             if !session.draft.attachments.isEmpty {
                 ScrollView(.horizontal) {
@@ -380,6 +388,7 @@ private struct CodexMessageComposer: View {
             }
         }
         .padding(12)
+        }
         .background(Color.panelBackground)
         .photosPicker(isPresented: $showPhotos, selection: $photos,
                       maxSelectionCount: max(1, CodexAttachmentImporter.maximumCount - session.draft.attachments.count), matching: .images)
