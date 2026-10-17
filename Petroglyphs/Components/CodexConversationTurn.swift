@@ -41,6 +41,11 @@ struct CodexConversationTurnView: View {
                 .accessibilityIdentifier("chat.process.\(turn.id)")
             }
             ForEach(turn.messages.filter { $0.role != "user" && ($0.phase != "commentary" || $0.state == .failed) }, id: \.displayID) { row($0) }
+            if turn.messages.contains(where: { $0.role != "user" && $0.state == .failed }) {
+                Label("Task failed", systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(Color.rust)
+            } else if turn.messages.contains(where: { $0.role != "user" && ($0.phase == "final_answer" || $0.phase == "final") && $0.state == .completed }) {
+                Label("Completed", systemImage: "checkmark.circle").font(.caption).foregroundStyle(.secondary)
+            }
         }
         .onAppear {
             let readingID = store.session(for: target).readingMessageID

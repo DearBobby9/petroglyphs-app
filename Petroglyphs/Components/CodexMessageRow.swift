@@ -48,18 +48,26 @@ struct CodexMessageRow: View {
 
             if isUser {
                 HStack(spacing: 5) {
-                    if !message.state.isTerminal { ProgressView().controlSize(.mini) }
+                    if message.state == .dispatching { ProgressView().controlSize(.mini) }
+                    if message.state == .pending { Image(systemName: "clock") }
                     if message.state == .failed { Image(systemName: "exclamationmark.circle") }
-                    Text(message.state.label)
+                    Text(message.deliveryLabel(receipt: receipt))
                         .accessibilityIdentifier("chat.status.\(message.clientMessageId ?? message.id)")
                     if let date = message.createdAt { Text(date, style: .time) }
                 }
                 .font(.caption)
                 .foregroundStyle(message.state == .failed ? Color.rust : Color.charcoal.opacity(0.65))
                 if let selection = receipt?.selection ?? local?.selection {
-                    CodexModelEvidenceView(selection: selection, evidence: receipt?.modelEvidence,
-                                           verification: receipt?.modelVerification)
-                        .accessibilityIdentifier("chat.modelEvidence.\(message.clientMessageId ?? message.id)")
+                    if receipt?.modelVerification == "different" {
+                        Label("The actual model differs from the requested model", systemImage: "exclamationmark.triangle")
+                            .font(.caption).foregroundStyle(Color.rust)
+                    }
+                    DisclosureGroup("Model details") {
+                        CodexModelEvidenceView(selection: selection, evidence: receipt?.modelEvidence,
+                                               verification: receipt?.modelVerification)
+                    }
+                    .font(.caption)
+                    .accessibilityIdentifier("chat.modelEvidence.\(message.clientMessageId ?? message.id)")
                 }
                 if let notice = local?.notice ?? receipt?.notice, !notice.isEmpty {
                     Text(notice).font(.caption).foregroundStyle(.secondary)
@@ -75,7 +83,7 @@ struct CodexMessageRow: View {
                 }
                 if message.state == .unknown, let id = message.clientMessageId ?? receipt?.id {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(receipt?.queueBlocking == false ? "This uncertain request no longer blocks the queue." : "Delivery is uncertain. This request is still being checked.")
+                        Text(message.uncertaintyNotice(receipt: receipt))
                             .font(.caption).foregroundStyle(.secondary)
                         if receipt?.queueBlocking != false {
                             Button("Let later messages continue") { Task { await store.releaseWait(id, for: target) } }

@@ -499,6 +499,95 @@ final class CodexConversationStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testStoppedNativeTurnConfirmsDeliveryWithoutClaimingCompletionAfterRestart() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ConversationNetworkFixture()
+        let destination = target()
+        let requestID = "stopped-request"
+        let turnID = "01a14813-4f4b-7482-86d0-bfdc41d6b2d0"
+        // Interrupted native turns arrive as unknown, with a real user message and
+        // turn ID. Unknown describes completion here, not whether Codex received it.
+        let native = CodexConversationMessage(id: "native-user", turnId: turnID, clientMessageId: requestID,
+            role: "user", text: "Original request", phase: "user", createdAt: Date(), state: .unknown, attachments: [])
+        var receipt = CodexMessageReceipt(id: requestID, hostId: destination.host.id, threadId: destination.thread.id,
+            createdAt: Date(), updatedAt: Date(), state: .unknown, turnId: turnID, message: native,
+            error: nil, notice: "Codex has not confirmed a completed response. You can continue the conversation.")
+        receipt.queueBlocking = false
+        await network.setPage(messages: [native], host: destination.host.id, receipts: [receipt])
+        let store = CodexConversationStore(network: network, storageRoot: root)
+        await store.refresh(for: destination)
+        let restored = CodexConversationStore(network: network, storageRoot: root)
+
+        for candidate in [store, restored] {
+            let message = try XCTUnwrap(candidate.session(for: destination).messages.first)
+            let savedReceipt = try XCTUnwrap(candidate.receipt(requestID, for: destination))
+            XCTAssertEqual(message.id, native.id)
+            XCTAssertEqual(message.clientMessageId, requestID)
+            XCTAssertEqual(message.turnId, turnID)
+            XCTAssertEqual(message.state, .unknown)
+            XCTAssertEqual(savedReceipt.state, .unknown)
+            XCTAssertEqual(savedReceipt.notice, receipt.notice)
+            XCTAssertEqual(savedReceipt.queueBlocking, false)
+            XCTAssertEqual(message.deliveryLabel(receipt: savedReceipt), "Received by Codex")
+            XCTAssertEqual(message.uncertaintyLabel(receipt: savedReceipt), "Response completion not confirmed")
+            XCTAssertEqual(message.uncertaintyNotice(receipt: savedReceipt),
+                "Response completion is not confirmed. This request no longer blocks the queue.")
+        }
+        let requests = await network.requests
+        XCTAssertTrue(requests.isEmpty, "Presenting and restoring an unknown turn must never resend it.")
+    }
+
+    func testNativeTurnEvidenceConfirmsDeliveryForUnknownAndFailedMessages() {
+        let evidence: [(message: String?, receipt: String?, embedded: String?)] = [
+            ("native-turn", nil, nil), (nil, "native-turn", nil), (nil, nil, "native-turn")
+        ]
+        for state in [CodexMessageState.unknown, .failed] {
+            for turns in evidence {
+                let message = CodexConversationMessage(id: "user", turnId: turns.message, clientMessageId: "request",
+                    role: "user", text: "Original", phase: "user", createdAt: nil, state: state, attachments: [])
+                let embedded = CodexConversationMessage(id: "receipt-user", turnId: turns.embedded, clientMessageId: "request",
+                    role: "user", text: "Original", phase: "user", createdAt: nil, state: state, attachments: [])
+                let receipt = CodexMessageReceipt(id: "request", hostId: "local", threadId: "thread",
+                    createdAt: Date(), updatedAt: Date(), state: state, turnId: turns.receipt, message: embedded,
+                    error: nil, notice: nil)
+                XCTAssertEqual(message.deliveryLabel(receipt: receipt), "Received by Codex")
+                if turns.message != nil {
+                    XCTAssertEqual(message.deliveryLabel(receipt: nil), "Received by Codex",
+                        "Native history remains evidence even without a cached bridge receipt.")
+                }
+                if state == .unknown {
+                    XCTAssertEqual(message.uncertaintyLabel(receipt: receipt), "Response completion not confirmed")
+                    XCTAssertEqual(message.uncertaintyNotice(receipt: receipt),
+                        "Response completion is not confirmed. This request is still being checked.")
+                }
+                XCTAssertEqual(message.state, state, "Delivery evidence must not infer successful completion.")
+            }
+        }
+    }
+
+    func testBridgeReceiptWithoutNativeTurnKeepsDeliveryUnconfirmed() {
+        for invalidTurnID in [nil, "", " \n\t"] as [String?] {
+            var message = CodexConversationMessage(id: "client:request", turnId: invalidTurnID, clientMessageId: "request",
+                role: "user", text: "Original", phase: "user", createdAt: nil, state: .unknown, attachments: [])
+            var receipt = CodexMessageReceipt(id: "request", hostId: "local", threadId: "thread",
+                createdAt: Date(), updatedAt: Date(), state: .unknown, turnId: invalidTurnID, message: message,
+                error: nil, notice: nil)
+            XCTAssertEqual(message.deliveryLabel(receipt: nil), "Delivery not confirmed")
+            XCTAssertEqual(message.deliveryLabel(receipt: receipt), "Delivery not confirmed",
+                "A bridge receipt or client ID alone is not native acceptance.")
+            XCTAssertEqual(message.uncertaintyLabel(receipt: receipt), "Delivery not confirmed")
+            XCTAssertEqual(message.uncertaintyNotice(receipt: receipt),
+                "Delivery is uncertain. This request is still being checked.")
+            receipt.queueBlocking = false
+            XCTAssertEqual(message.uncertaintyNotice(receipt: receipt),
+                "Delivery is uncertain. This request no longer blocks the queue.")
+            message.state = .failed
+            XCTAssertEqual(message.deliveryLabel(receipt: receipt), "Sending failed")
+        }
+    }
+
+    @MainActor
     func testReleaseUnknownWaitKeepsOriginalRequestAndLateReceiptAcrossRestart() async throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

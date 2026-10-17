@@ -6,8 +6,10 @@ struct CodexWorkspaceRequestStatus: View {
     let store: CodexConversationStore
     let onOpen: () -> Void
 
+    private var receipt: CodexMessageReceipt? { store.receipt(reference.id, for: reference.target) }
+
     private var state: CodexMessageState? {
-        store.receipt(reference.id, for: reference.target)?.state ?? store.localMessage(reference.id, for: reference.target)?.state
+        receipt?.state ?? store.localMessage(reference.id, for: reference.target)?.state
     }
 
     private var status: String {
@@ -18,7 +20,11 @@ struct CodexWorkspaceRequestStatus: View {
         case .running: return "Running"
         case .completed: return "Completed"
         case .failed: return "Failed"
-        case .unknown: return "Delivery not confirmed"
+        case .unknown:
+            let message = store.session(for: reference.target).history.first {
+                $0.role == "user" && ($0.clientMessageId == reference.id || $0.id == reference.id)
+            } ?? receipt?.message ?? store.localMessage(reference.id, for: reference.target)?.message
+            return message?.uncertaintyLabel(receipt: receipt) ?? "Delivery not confirmed"
         case .cancelled: return "Cancelled before dispatch"
         case nil: return "Open original request to check status"
         }

@@ -70,6 +70,36 @@ struct CodexConversationMessage: Codable, Identifiable, Equatable {
     var displayID: String {
         role == "user" ? clientMessageId.map { "user:\($0)" } ?? id : id
     }
+
+    func deliveryLabel(receipt: CodexMessageReceipt?) -> String {
+        switch state {
+        case .pending: return "Waiting in bridge queue"
+        case .dispatching: return "Bridge is dispatching…"
+        case .queued, .running, .completed: return "Received by Codex"
+        case .failed: return hasNativeTurn(receipt: receipt) ? "Received by Codex" : "Sending failed"
+        case .unknown: return hasNativeTurn(receipt: receipt) ? "Received by Codex" : "Delivery not confirmed"
+        case .cancelled: return "Cancelled before dispatch"
+        }
+    }
+
+    func uncertaintyLabel(receipt: CodexMessageReceipt?) -> String {
+        hasNativeTurn(receipt: receipt) ? "Response completion not confirmed" : "Delivery not confirmed"
+    }
+
+    func uncertaintyNotice(receipt: CodexMessageReceipt?) -> String {
+        let uncertainty = hasNativeTurn(receipt: receipt) ? "Response completion is not confirmed." : "Delivery is uncertain."
+        return uncertainty + (receipt?.queueBlocking == false
+            ? " This request no longer blocks the queue."
+            : " This request is still being checked.")
+    }
+
+    private func hasNativeTurn(receipt: CodexMessageReceipt?) -> Bool {
+        // A turn ID comes from a native start response or observed native history.
+        // A bridge receipt/client ID alone does not prove delivery, and a native
+        // turn does not prove successful completion (interrupted turns are unknown).
+        [turnId, receipt?.turnId, receipt?.message.turnId].compactMap { $0 }
+            .contains { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
 }
 
 extension CodexConversationMessage {

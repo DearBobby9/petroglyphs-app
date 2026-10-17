@@ -76,9 +76,6 @@ struct CodexRepliesPanel: View {
         HStack(spacing: 0) {
             HStack(spacing: 8) {
                 Text("Chat").font(.headline).lineLimit(1)
-                if newChat.map({ $0.isBusy || $0.isObservingCreation }) ?? (session?.isBusy == true) {
-                    ProgressView().controlSize(.small)
-                }
             }
             .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 8)
@@ -157,6 +154,10 @@ struct CodexRepliesPanel: View {
                 .accessibilityIdentifier("chat.loadError")
                 .chatChromeHeight("error")
             }
+            if let receiptError = session.receiptError {
+                Label("Delivery check: \(receiptError)", systemImage: "exclamationmark.arrow.triangle.2.circlepath")
+                    .font(.caption).foregroundStyle(Color.rust).padding(.horizontal, 14).padding(.vertical, 6)
+            }
             Divider()
             CodexConversationTimeline(store: store, target: target, session: session)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -232,9 +233,13 @@ private struct CodexConversationTimeline: View {
                             CodexConversationTurnView(turn: turn, target: target, store: store)
                         }
                         if session.runState == "running" || session.runState == "waiting" {
-                            Label(session.runState == "waiting" ? "Codex is waiting" : "Codex is working…", systemImage: "ellipsis.bubble")
-                                .font(.caption).foregroundStyle(.secondary)
-                                .accessibilityIdentifier("chat.runState")
+                            VStack(alignment: .leading, spacing: 6) {
+                                Label(session.runState == "waiting" ? "Waiting" : "Running", systemImage: session.runState == "waiting" ? "pause.circle" : "ellipsis.bubble")
+                                    .font(.caption.weight(.semibold))
+                                Text("\(target.host.name) · \(target.thread.displayTitle)").font(.caption)
+                            }
+                            .foregroundStyle(.secondary)
+                            .accessibilityIdentifier("chat.runState")
                         }
                         CodexExecutionControlsView(target: target, runState: session.runState,
                                                    latestTurnID: session.history.last?.turnId)
