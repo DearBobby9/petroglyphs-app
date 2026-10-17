@@ -352,6 +352,133 @@ final class CodexConversationStoreTests: XCTestCase {
         XCTAssertEqual(store.session(for: destination).beforeCursor, "100", "An overlapping refresh must preserve the oldest loaded cursor.")
     }
 
+    @MainActor
+    func testCorruptOrFutureStateSurvivesReadOnlyRefreshAndBlockedSend() async throws {
+        for bytes in [Data("broken {".utf8), Data(#"{"version":999,"draft":{"text":"future","attachments":[]},"outgoing":[],"isAtBottom":true}"#.utf8)] {
+            let root = temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let destination = target()
+            let directory = root.appendingPathComponent(CodexConversationKey(destination).storageID)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let path = directory.appendingPathComponent("state.json")
+            try bytes.write(to: path)
+            let network = ConversationNetworkFixture()
+            let store = CodexConversationStore(network: network, storageRoot: root)
+            await store.refresh(for: destination)
+            XCTAssertEqual(try Data(contentsOf: path), bytes)
+            store.setDraftText("New local input", for: destination)
+            await store.sendDraft(to: destination)
+            XCTAssertEqual(try Data(contentsOf: path), bytes)
+            let requests = await network.requests
+            XCTAssertTrue(requests.isEmpty, "Unrestored request IDs must stay protected before another send.")
+            XCTAssertNotNil(store.session(for: destination).draftError)
+            try store.preserveUnreadableState(for: destination)
+            let backups = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).filter { $0.lastPathComponent.hasPrefix("state.json.recovery-") }
+            XCTAssertEqual(backups.count, 1)
+            XCTAssertEqual(try Data(contentsOf: XCTUnwrap(backups.first)), bytes)
+            let reopened = CodexConversationStore(network: network, storageRoot: root)
+            XCTAssertEqual(reopened.session(for: destination).draft.text, "New local input")
+        }
+    }
+
+    @MainActor
+    func testCorruptHistoryDoesNotPreventIndependentDraftRecoveryOrSaving() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = target()
+        let store = CodexConversationStore(network: ConversationNetworkFixture(), storageRoot: root)
+        store.setDraftText("Original draft", for: destination)
+        let history = root.appendingPathComponent(CodexConversationKey(destination).storageID).appendingPathComponent("history.json")
+        try Data("broken history".utf8).write(to: history)
+        let restored = CodexConversationStore(network: ConversationNetworkFixture(), storageRoot: root)
+        XCTAssertEqual(restored.session(for: destination).draft.text, "Original draft")
+        XCTAssertNil(restored.session(for: destination).draftError)
+        XCTAssertNotNil(restored.session(for: destination).error)
+        restored.setDraftText("Continued editing", for: destination)
+        let reopened = CodexConversationStore(network: ConversationNetworkFixture(), storageRoot: root)
+        XCTAssertEqual(reopened.session(for: destination).draft.text, "Continued editing")
+    }
+
+    @MainActor
+    func testInvalidStateVersionsAndDuplicateOutgoingIDsProtectOriginalRequests() async throws {
+        let id = "00000000-0000-4000-8000-000000000002"
+        let outgoing = #"{"id":"\#(id)","text":"Original request","attachments":[],"createdAt":0,"state":"unknown","canRetry":false,"appearedInHistory":false}"#
+        let fixtures = [
+            #"{"version":0,"draft":{"text":"Original draft","attachments":[]},"outgoing":[\#(outgoing)],"isAtBottom":true}"#,
+            #"{"version":-1,"draft":{"text":"Original draft","attachments":[]},"outgoing":[\#(outgoing)],"isAtBottom":true}"#,
+            #"{"version":2,"draft":{"text":"Original draft","attachments":[]},"outgoing":[\#(outgoing),\#(outgoing)],"isAtBottom":true}"#
+        ]
+        for fixture in fixtures {
+            let root = temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let destination = target()
+            let directory = root.appendingPathComponent(CodexConversationKey(destination).storageID)
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            let path = directory.appendingPathComponent("state.json")
+            let bytes = Data(fixture.utf8)
+            try bytes.write(to: path)
+            let network = ConversationNetworkFixture()
+            let store = CodexConversationStore(network: network, storageRoot: root)
+            let session = store.session(for: destination)
+            XCTAssertTrue(session.stateRestorationFailed)
+            XCTAssertTrue(session.draft.isEmpty)
+            XCTAssertTrue(session.outgoing.isEmpty)
+            // Do not invoke the pre-fix duplicate-key trap after a failed protection assertion.
+            if session.stateRestorationFailed { XCTAssertTrue(session.messages.isEmpty) }
+            store.setDraftText("Continue after preserving evidence", for: destination)
+            await store.refresh(for: destination)
+            await store.sendDraft(to: destination)
+            XCTAssertEqual(try Data(contentsOf: path), bytes)
+            let requests = await network.requests
+            XCTAssertTrue(requests.isEmpty)
+            try store.preserveUnreadableState(for: destination)
+            let backups = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+                .filter { $0.lastPathComponent.hasPrefix("state.json.recovery-") }
+            XCTAssertEqual(backups.count, 1)
+            XCTAssertEqual(try Data(contentsOf: XCTUnwrap(backups.first)), bytes)
+        }
+    }
+
+    @MainActor
+    func testInvalidHistoryVersionsAndDuplicateReceiptsLeaveDraftRecoveryIndependent() async throws {
+        let destination = target()
+        let id = "00000000-0000-4000-8000-000000000002"
+        let receipt = #"{"id":"\#(id)","hostId":"local","threadId":"\#(destination.thread.id)","createdAt":0,"updatedAt":0,"state":"unknown","message":{"id":"client:\#(id)","clientMessageId":"\#(id)","role":"user","text":"Original request","phase":"user","state":"unknown","attachments":[]}}"#
+        let fixtures = [
+            #"{"version":0,"messages":[],"hasLoadedOlder":false,"receipts":[\#(receipt)]}"#,
+            #"{"version":-1,"messages":[],"hasLoadedOlder":false,"receipts":[\#(receipt)]}"#,
+            #"{"version":2,"messages":[],"hasLoadedOlder":false,"receipts":[\#(receipt),\#(receipt)]}"#
+        ]
+        for fixture in fixtures {
+            let root = temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let network = ConversationNetworkFixture()
+            let store = CodexConversationStore(network: network, storageRoot: root)
+            store.setDraftText("Independent draft", for: destination)
+            let directory = root.appendingPathComponent(CodexConversationKey(destination).storageID)
+            let path = directory.appendingPathComponent("history.json")
+            let bytes = Data(fixture.utf8)
+            try bytes.write(to: path)
+            let restored = CodexConversationStore(network: network, storageRoot: root)
+            let session = restored.session(for: destination)
+            XCTAssertTrue(session.historyRestorationFailed)
+            XCTAssertFalse(session.hasLoaded)
+            XCTAssertTrue(session.receipts.isEmpty)
+            XCTAssertEqual(session.draft.text, "Independent draft")
+            XCTAssertNil(session.draftError)
+            restored.setDraftText("Continued editing", for: destination)
+            XCTAssertEqual(try Data(contentsOf: path), bytes)
+            await restored.refresh(for: destination)
+            let backups = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+                .filter { $0.lastPathComponent.hasPrefix("history.json.recovery-") }
+            XCTAssertEqual(backups.count, 1)
+            XCTAssertEqual(try Data(contentsOf: XCTUnwrap(backups.first)), bytes)
+            let reopened = CodexConversationStore(network: network, storageRoot: root)
+            XCTAssertEqual(reopened.session(for: destination).draft.text, "Continued editing")
+            XCTAssertFalse(reopened.session(for: destination).historyRestorationFailed)
+        }
+    }
+
     private func numberedMessages(_ numbers: ClosedRange<Int>) -> [CodexConversationMessage] {
         numbers.map { index in
             CodexConversationMessage(id: "message-\(index)", turnId: nil, clientMessageId: nil, role: "assistant", text: "Message \(index)", phase: "final_answer", createdAt: Date(timeIntervalSince1970: Double(index)), state: .completed, attachments: [])

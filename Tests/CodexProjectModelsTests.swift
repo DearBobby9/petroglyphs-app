@@ -766,6 +766,92 @@ final class CodexProjectModelsTests: XCTestCase {
     }
 
     @MainActor
+    func testInvalidCreationVersionsProtectBytesAndKeepRecoveryIndex() async throws {
+        for version in [0, -1] {
+            for hasRequest in [false, true] {
+                let root = temporaryDirectory()
+                defer { try? FileManager.default.removeItem(at: root) }
+                let network = ProjectNetworkFixture()
+                await network.configure(post: .timeout, receipt: .unknown)
+                let original = creation(network, root: root)
+                original.title = "Original title"
+                original.prompt = "Keep the original requirement"
+                original.modelSelection = CodexDraftModelSelection(model: "model-a", reasoningEffort: "high")
+                if hasRequest { await original.submit() }
+                let path = root.appendingPathComponent(original.draftID).appendingPathExtension("json")
+                var saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+                saved["version"] = version
+                let bytes = try JSONSerialization.data(withJSONObject: saved, options: .sortedKeys)
+                try bytes.write(to: path)
+                let independent = creation(network, root: root, projectID: "another-project")
+                independent.prompt = "Independent usable draft"
+                let postsBeforeRecovery = await network.posts
+                let readsBeforeRecovery = await network.receiptReadCount
+
+                let entries = CodexProjectCreationModel.savedDrafts(storageRoot: root)
+                XCTAssertEqual(entries.count, 2)
+                let protected = try XCTUnwrap(entries.first { $0.id == original.draftID })
+                XCTAssertEqual(protected.state, "unreadable")
+                XCTAssertNotNil(protected.recoveryError)
+                XCTAssertNil(protected.destination)
+                XCTAssertNil(protected.requestID)
+                XCTAssertEqual(entries.first { $0.id == independent.draftID }?.prompt, independent.prompt)
+
+                let restored = creation(network, root: root)
+                XCTAssertNotNil(restored.storageError)
+                XCTAssertNil(restored.request)
+                XCTAssertNil(restored.receipt)
+                XCTAssertTrue(restored.prompt.isEmpty)
+                XCTAssertTrue(restored.title.isEmpty)
+                XCTAssertNil(restored.modelSelection)
+                restored.title = "New local title"
+                restored.prompt = "New local input must not overwrite the original"
+                XCTAssertFalse(restored.canSubmit)
+                XCTAssertFalse(restored.changeDestination(project: independent.project, host: independent.host, serverURL: independent.serverURL))
+                await restored.submit()
+                await restored.checkStatus()
+                await restored.retryOriginal()
+                await restored.retryCreation()
+                XCTAssertFalse(restored.acknowledgeOpenedChat())
+                XCTAssertEqual(try Data(contentsOf: path), bytes)
+                let postsAfterRecovery = await network.posts
+                let readsAfterRecovery = await network.receiptReadCount
+                XCTAssertEqual(postsAfterRecovery, postsBeforeRecovery)
+                XCTAssertEqual(readsAfterRecovery, readsBeforeRecovery)
+                let reopened = CodexProjectCreationModel.savedDrafts(storageRoot: root)
+                XCTAssertEqual(reopened.first { $0.id == original.draftID }?.state, "unreadable")
+                XCTAssertNotNil(reopened.first { $0.id == original.draftID }?.recoveryError)
+            }
+        }
+    }
+
+    @MainActor
+    func testSupportedAndLegacyCreationVersionsRestoreOriginalRequestAndIndex() async throws {
+        for version in [nil, 1, 2] as [Int?] {
+            let root = temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let network = ProjectNetworkFixture()
+            await network.configure(post: .timeout, receipt: .unknown)
+            let original = creation(network, root: root)
+            original.prompt = "Existing supported request"
+            await original.submit()
+            let request = try XCTUnwrap(original.request)
+            let path = root.appendingPathComponent(original.draftID).appendingPathExtension("json")
+            var saved = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: path)) as? [String: Any])
+            saved["version"] = version
+            try JSONSerialization.data(withJSONObject: saved, options: .sortedKeys).write(to: path)
+            let restored = creation(network, root: root)
+            XCTAssertNil(restored.storageError)
+            XCTAssertEqual(restored.request, request)
+            XCTAssertEqual(restored.prompt, request.prompt)
+            let summary = try XCTUnwrap(CodexProjectCreationModel.savedDrafts(storageRoot: root).first)
+            XCTAssertEqual(summary.requestID, request.id)
+            XCTAssertEqual(summary.state, "unknown")
+            XCTAssertNil(summary.recoveryError)
+        }
+    }
+
+    @MainActor
     private func creation(_ network: ProjectNetworkFixture, root: URL, host: String = "local", projectID: String = "project-local", base: URL? = nil) -> CodexProjectCreationModel {
         CodexProjectCreationModel(
             project: CodexProject(id: projectID, name: "Project", path: "/project", canCreate: true, reason: nil),

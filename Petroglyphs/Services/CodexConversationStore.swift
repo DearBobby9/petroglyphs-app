@@ -20,6 +20,8 @@ final class CodexConversationSession {
     var hasLoadedOlder = false
     var error: String?
     var draftError: String?
+    var stateRestorationFailed = false
+    var historyRestorationFailed = false
     var importingCount = 0
     var isAtBottom = true
     var readingMessageID: String?
@@ -69,6 +71,8 @@ final class CodexConversationStore {
             let path = directory(for: key).appendingPathComponent("state.json")
             if FileManager.default.fileExists(atPath: path.path) {
                 let stored = try JSONDecoder().decode(SavedConversation.self, from: Data(contentsOf: path))
+                guard (1...2).contains(stored.version ?? 1) else { throw ConversationError.unsupportedStorageVersion }
+                guard Set(stored.outgoing.map(\.id)).count == stored.outgoing.count else { throw ConversationError.duplicateStoredID }
                 session.draft = stored.draft
                 session.outgoing = stored.outgoing.map { item in
                     var item = item
@@ -78,17 +82,26 @@ final class CodexConversationStore {
                 session.readingMessageID = stored.readingMessageID
                 session.isAtBottom = stored.isAtBottom
             }
+        } catch {
+            session.stateRestorationFailed = true
+            session.draftError = "Could not restore this chat’s draft and requests. The original file is protected. Preserve it before starting a new draft."
+        }
+        do {
             let historyPath = directory(for: key).appendingPathComponent("history.json")
             if FileManager.default.fileExists(atPath: historyPath.path) {
                 let saved = try JSONDecoder().decode(SavedHistory.self, from: Data(contentsOf: historyPath))
+                guard (1...2).contains(saved.version ?? 1) else { throw ConversationError.unsupportedStorageVersion }
+                let receipts = saved.receipts ?? []
+                guard Set(receipts.map(\.id)).count == receipts.count else { throw ConversationError.duplicateStoredID }
                 session.history = saved.messages
                 session.beforeCursor = saved.beforeCursor
                 session.hasLoadedOlder = saved.hasLoadedOlder
                 session.hasLoaded = true
-                session.receipts = Dictionary(uniqueKeysWithValues: (saved.receipts ?? []).map { ($0.id, $0) })
+                session.receipts = Dictionary(uniqueKeysWithValues: receipts.map { ($0.id, $0) })
             }
         } catch {
-            session.draftError = "Could not restore this chat’s draft. The saved file has been kept."
+            session.historyRestorationFailed = true
+            session.error = "Could not restore cached history. Drafts and requests are stored separately."
         }
         sessions[key] = session
         return session
@@ -374,27 +387,51 @@ final class CodexConversationStore {
         return directory(for: key).appendingPathComponent(filename)
     }
 
+    // Explicit recovery preserves unreadable request IDs before replacing any bytes.
+    // A failed copy leaves both the source file and the write protection intact.
+    func preserveUnreadableState(for target: CodexChatTarget) throws {
+        let session = session(for: target)
+        guard session.stateRestorationFailed else { return }
+        try preserveOriginal("state.json", for: session)
+        session.stateRestorationFailed = false
+        do { try save(session); session.draftError = nil }
+        catch { session.stateRestorationFailed = true; throw error }
+    }
+
+    private func preserveOriginal(_ filename: String, for session: CodexConversationSession) throws {
+        let source = directory(for: session.key).appendingPathComponent(filename)
+        let backup = source.appendingPathExtension("recovery-\(UUID().uuidString)")
+        try FileManager.default.copyItem(at: source, to: backup)
+        guard try Data(contentsOf: source) == Data(contentsOf: backup) else { throw ConversationError.protectedState }
+    }
+
     private func save(_ session: CodexConversationSession) throws {
+        guard !session.stateRestorationFailed else { throw ConversationError.protectedState }
         let directory = directory(for: session.key)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let saved = SavedConversation(draft: session.draft, outgoing: session.outgoing,
+        let saved = SavedConversation(version: 2, draft: session.draft, outgoing: session.outgoing,
                                       readingMessageID: session.readingMessageID, isAtBottom: session.isAtBottom)
         try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("state.json"), options: .atomic)
     }
 
     private func saveReportingFailure(_ session: CodexConversationSession) {
         do { try save(session) }
-        catch { session.draftError = "Could not save this chat on the iPad. Keep the app open and free some storage before sending." }
+        catch { session.draftError = session.stateRestorationFailed ? error.localizedDescription : "Could not save this chat on the iPad. Keep the app open and free some storage before sending." }
     }
 
     private func saveHistory(_ session: CodexConversationSession) throws {
         let directory = directory(for: session.key)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let saved = SavedHistory(messages: session.history, beforeCursor: session.beforeCursor, hasLoadedOlder: session.hasLoadedOlder, receipts: Array(session.receipts.values))
+        if session.historyRestorationFailed {
+            try preserveOriginal("history.json", for: session)
+            session.historyRestorationFailed = false
+        }
+        let saved = SavedHistory(version: 2, messages: session.history, beforeCursor: session.beforeCursor, hasLoadedOlder: session.hasLoadedOlder, receipts: Array(session.receipts.values))
         try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("history.json"), options: .atomic)
     }
 
     private struct SavedHistory: Codable {
+        let version: Int?
         let messages: [CodexConversationMessage]
         let beforeCursor: String?
         let hasLoadedOlder: Bool
@@ -402,6 +439,7 @@ final class CodexConversationStore {
     }
 
     private struct SavedConversation: Codable {
+        let version: Int?
         let draft: CodexMessageDraft
         let outgoing: [CodexLocalMessage]
         let readingMessageID: String?
@@ -409,10 +447,13 @@ final class CodexConversationStore {
     }
 
     enum ConversationError: LocalizedError {
-        case wrongDestination, textTooLong, imageUnavailable, incompleteModelSelection
+        case wrongDestination, textTooLong, imageUnavailable, incompleteModelSelection, protectedState, unsupportedStorageVersion, duplicateStoredID
         case invalidModelSelection(String)
         var errorDescription: String? {
             switch self {
+            case .protectedState: "The saved requests could not be restored. Preserve the original file before continuing."
+            case .unsupportedStorageVersion: "This saved chat uses an unsupported storage version."
+            case .duplicateStoredID: "This saved chat contains duplicate request IDs."
             case .wrongDestination: "The server returned data for a different chat. No message was moved."
             case .textTooLong: "Keep each message under 20,000 characters."
             case .imageUnavailable: "This image is no longer available."

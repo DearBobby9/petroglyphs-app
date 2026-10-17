@@ -62,7 +62,7 @@ final class CodexProjectCreationModel {
             let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
             do {
                 let saved = try JSONDecoder().decode(SavedCreation.self, from: Data(contentsOf: file))
-                guard (saved.version ?? 1) <= 2 else { throw NetworkService.NetworkError.badResponse }
+                guard (1...2).contains(saved.version ?? 1) else { throw NetworkService.NetworkError.badResponse }
                 return CodexCreationDraftSummary(id: id, destination: saved.destination,
                     title: saved.request?.title ?? saved.draft?.title ?? "",
                     prompt: saved.request?.prompt ?? saved.draft?.prompt ?? "",
@@ -360,7 +360,7 @@ final class CodexProjectCreationModel {
         defer { isRestoring = false }
         do {
             let saved = try JSONDecoder().decode(SavedCreation.self, from: Data(contentsOf: fileURL))
-            guard (saved.version ?? 1) <= 2 else { throw NetworkService.NetworkError.badResponse }
+            guard (1...2).contains(saved.version ?? 1) else { throw NetworkService.NetworkError.badResponse }
             if let destination = saved.destination {
                 project = destination.project
                 host = destination.host
