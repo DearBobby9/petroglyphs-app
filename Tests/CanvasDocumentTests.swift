@@ -474,6 +474,134 @@ final class CanvasDocumentTests: XCTestCase {
         XCTAssertEqual(model.drawing.strokes.count, 1)
     }
 
+    @MainActor
+    func testSelectionChecksVisibleInkInsteadOfDiagonalBoundingBox() throws {
+        let storage = temporaryStorage()
+        let model = CanvasViewModel(storageURL: storage)
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 200, height: 200)).pngData { context in
+            UIColor.green.setFill(); context.fill(CGRect(x: 0, y: 0, width: 200, height: 200))
+        }
+        try model.setReferenceImage(data: image, name: "Reference.png", sourceID: "selection")
+        let referenceData = try XCTUnwrap(model.referenceImage).data
+        let diagonal = drawingThrough([CGPoint(x: 20, y: 20), CGPoint(x: 60, y: 60), CGPoint(x: 100, y: 100)])
+        model.drawing = diagonal
+        model.selectContent(at: CGPoint(x: 90, y: 30), tolerance: 4)
+        XCTAssertTrue(model.isReferenceSelected)
+        XCTAssertTrue(model.selectedStrokeIndexes.isEmpty)
+        model.selectContent(in: CGRect(x: 85, y: 25, width: 10, height: 10))
+        XCTAssertTrue(model.selectedStrokeIndexes.isEmpty)
+        model.selectContent(at: CGPoint(x: 65, y: 55), tolerance: 4)
+        XCTAssertEqual(model.selectedStrokeIndexes, [0], "Tolerance follows the nearby visible ink.")
+        model.selectContent(at: CGPoint(x: 75, y: 45), tolerance: 4)
+        XCTAssertTrue(model.isReferenceSelected)
+        model.selectContent(at: CGPoint(x: 60, y: 60), tolerance: 4)
+        XCTAssertEqual(model.selectedStrokeIndexes, [0])
+        XCTAssertFalse(model.isReferenceSelected)
+        model.deleteSelectedContent()
+        XCTAssertTrue(model.drawing.strokes.isEmpty)
+        XCTAssertNotNil(model.referenceImage)
+        model.undo()
+        XCTAssertEqual(model.drawing, diagonal)
+        model.redo()
+        XCTAssertEqual(CanvasViewModel(storageURL: storage).referenceImage?.data, referenceData)
+        XCTAssertTrue(CanvasViewModel(storageURL: storage).drawing.strokes.isEmpty)
+    }
+
+    @MainActor
+    func testClosedCurveInteriorIsNotInkAndIntersectingBoxStillSelects() {
+        let model = CanvasViewModel(storageURL: temporaryStorage())
+        let circle = (0...32).map { index in
+            let angle = CGFloat(index) * .pi / 16
+            return CGPoint(x: 100 + cos(angle) * 60, y: 100 + sin(angle) * 60)
+        }
+        model.drawing = drawingThrough(circle)
+        model.selectContent(at: CGPoint(x: 100, y: 100), tolerance: 12)
+        XCTAssertFalse(model.hasSelection)
+        model.selectContent(in: CGRect(x: 90, y: 90, width: 20, height: 20))
+        XCTAssertFalse(model.hasSelection)
+        model.selectContent(in: CGRect(x: 155, y: 95, width: 10, height: 10))
+        XCTAssertEqual(model.selectedStrokeIndexes, [0])
+    }
+
+    @MainActor
+    func testSelectionHonorsStrokeTransformMaskWidthAndTopmostOrder() {
+        let model = CanvasViewModel(storageURL: temporaryStorage())
+        var masked = makeDrawing().strokes[0]
+        masked.mask = UIBezierPath(rect: CGRect(x: 0, y: 0, width: 60, height: 100))
+        masked.transform = CGAffineTransform(translationX: 200, y: 100)
+        model.drawing = PKDrawing(strokes: [masked])
+        model.selectContent(at: CGPoint(x: 280, y: 140), tolerance: 2)
+        XCTAssertFalse(model.hasSelection, "Erased portions of a transformed stroke are not selectable ink.")
+        model.selectContent(at: CGPoint(x: 240, y: 144), tolerance: 2)
+        XCTAssertEqual(model.selectedStrokeIndexes, [0], "The probe includes visible line width, not just the centerline.")
+        model.selectContent(in: CGRect(x: 275, y: 135, width: 10, height: 10))
+        XCTAssertFalse(model.hasSelection)
+        model.drawing = PKDrawing(strokes: makeDrawing().strokes + makeDrawing(ink: .blue).strokes)
+        model.selectContent(at: CGPoint(x: 60, y: 40), tolerance: 4)
+        XCTAssertEqual(model.selectedStrokeIndexes, [1])
+    }
+
+    @MainActor
+    func testCropHasItsOwnChronologicalUndoStepAndPersistsAfterRedo() throws {
+        let storage = temporaryStorage()
+        let model = CanvasViewModel(storageURL: storage)
+        let first = makeDrawing()
+        let second = PKDrawing(strokes: first.strokes + makeDrawing(ink: .blue).strokes)
+        let a = CGRect(x: 10, y: 20, width: 80, height: 60)
+        let b = CGRect(x: 20, y: 30, width: 40, height: 30)
+        let camera = CanvasViewport(center: CGPoint(x: 100, y: 200), zoom: 0.5)
+        model.drawing = first
+        try model.setExportBounds(a)
+        model.drawing = second
+        try model.setExportBounds(b)
+        model.saveViewport(camera)
+        model.undo()
+        XCTAssertEqual(model.drawing.strokes.count, 2, "Undo first reverses the latest crop edit only.")
+        XCTAssertEqual(model.selectedExportBounds, a)
+        model.undo()
+        XCTAssertEqual(model.drawing, first)
+        XCTAssertEqual(model.selectedExportBounds, a)
+        model.undo()
+        XCTAssertNil(model.selectedExportBounds)
+        XCTAssertEqual(model.drawing, first)
+        model.redo(); model.redo(); model.redo()
+        XCTAssertEqual(model.drawing.strokes.count, 2)
+        XCTAssertEqual(model.selectedExportBounds, b)
+        XCTAssertEqual(model.viewport, camera)
+        let restored = CanvasViewModel(storageURL: storage)
+        XCTAssertEqual(restored.selectedExportBounds, b)
+        XCTAssertEqual(UIImage(data: try XCTUnwrap(restored.snapshot()))?.size, b.size)
+    }
+
+    @MainActor
+    func testCropAfterUndoInvalidatesRedoAndDeleteCropUndoIsOrdered() throws {
+        let model = CanvasViewModel(storageURL: temporaryStorage())
+        model.drawing = makeDrawing()
+        model.selectAllContent(); model.deleteSelectedContent()
+        let crop = CGRect(x: 10, y: 20, width: 80, height: 60)
+        try model.setExportBounds(crop)
+        model.undo()
+        XCTAssertNil(model.selectedExportBounds)
+        XCTAssertTrue(model.drawing.strokes.isEmpty)
+        model.undo()
+        XCTAssertEqual(model.drawing.strokes.count, 1)
+        XCTAssertTrue(model.canRedo)
+        try model.setExportBounds(crop)
+        XCTAssertFalse(model.canRedo)
+        model.redo()
+        XCTAssertEqual(model.selectedExportBounds, crop)
+        XCTAssertEqual(model.drawing.strokes.count, 1)
+    }
+
+    private func drawingThrough(_ locations: [CGPoint]) -> PKDrawing {
+        let points = locations.enumerated().map { index, location in
+            PKStrokePoint(location: location, timeOffset: Double(index) * 0.1,
+                          size: CGSize(width: 8, height: 8), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
+        }
+        return PKDrawing(strokes: [PKStroke(ink: PKInk(.pen, color: .black),
+            path: PKStrokePath(controlPoints: points, creationDate: Date(timeIntervalSince1970: 1_000)))])
+    }
+
     private func temporaryStorage() -> URL {
         let directory = FileManager.default.temporaryDirectory.appending(path: "CanvasDocumentTests-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

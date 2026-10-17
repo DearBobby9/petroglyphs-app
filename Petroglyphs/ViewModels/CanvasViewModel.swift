@@ -150,6 +150,8 @@ final class CanvasViewModel {
     func setExportBounds(_ bounds: CGRect?) throws {
         if let bounds, !CanvasDocument.isValid(bounds) { throw CanvasDocument.DocumentError.invalidBounds }
         guard bounds != document.selectedExportBounds else { return }
+        // Crop is an explicit edit, with its own place in chronological undo.
+        recordEdit()
         document.selectedExportBounds = bounds
         refreshExportBounds()
         documentChanged()
@@ -194,20 +196,74 @@ final class CanvasViewModel {
 
     func selectContent(in bounds: CGRect) {
         guard CanvasDocument.isValid(bounds) else { clearSelection(); return }
-        selectedStrokeIndexes = Set(drawing.strokes.indices.filter { drawing.strokes[$0].renderBounds.intersects(bounds) })
+        selectedStrokeIndexes = Set(drawing.strokes.indices.filter { strokeHasInk(drawing.strokes[$0], in: bounds) })
         isReferenceSelected = referenceImage.map { $0.bounds.intersects(bounds) } ?? false
     }
 
     func selectContent(at point: CGPoint, tolerance: CGFloat) {
         clearSelection()
+        guard point.x.isFinite, point.y.isFinite, tolerance.isFinite, tolerance >= 0 else { return }
+        let radius = max(0.5, tolerance)
+        let probe = CGRect(x: point.x - radius, y: point.y - radius, width: radius * 2, height: radius * 2)
         // Ink is above the image. A tap selects the topmost matching object.
         if let index = drawing.strokes.indices.reversed().first(where: {
-            drawing.strokes[$0].renderBounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point)
+            strokeHasInk(drawing.strokes[$0], in: probe, circularProbe: probe)
         }) {
             selectedStrokeIndexes = [index]
         } else if referenceImage?.bounds.contains(point) == true {
             isReferenceSelected = true
         }
+    }
+
+    private func strokeHasInk(_ stroke: PKStroke, in bounds: CGRect, circularProbe: CGRect? = nil) -> Bool {
+        let overlap = stroke.renderBounds.intersection(bounds)
+        guard CanvasDocument.isValid(overlap) else { return false }
+        if circularProbe == nil, bounds.contains(stroke.renderBounds), stroke.mask == nil { return true }
+
+        // Ask PencilKit for the visible ink, including width, transforms and
+        // eraser masks. A bounding box alone includes empty diagonal/circle areas.
+        // Small tiles cap temporary memory even for a large drag selection.
+        let isolated = PKDrawing(strokes: [stroke])
+        let tileSize: CGFloat = 256
+        var y = overlap.minY
+        while y < overlap.maxY {
+            var x = overlap.minX
+            while x < overlap.maxX {
+                let tile = CGRect(x: x, y: y, width: min(tileSize, overlap.maxX - x), height: min(tileSize, overlap.maxY - y))
+                let hit = autoreleasepool {
+                    let rendered = isolated.image(from: tile, scale: 1)
+                    let visible: UIImage
+                    if let circularProbe {
+                        // UIKit handles image orientation and document-down Y
+                        // consistently for both the tolerance circle and ink.
+                        let format = UIGraphicsImageRendererFormat()
+                        format.scale = 1
+                        format.opaque = false
+                        visible = UIGraphicsImageRenderer(size: tile.size, format: format).image { renderer in
+                            renderer.cgContext.addEllipse(in: circularProbe.offsetBy(dx: -tile.minX, dy: -tile.minY))
+                            renderer.cgContext.clip()
+                            rendered.draw(in: CGRect(origin: .zero, size: tile.size))
+                        }
+                    } else {
+                        visible = rendered
+                    }
+                    guard let image = visible.cgImage else { return false }
+                    let width = image.width, height = image.height
+                    var alpha = [UInt8](repeating: 0, count: width * height * 4)
+                    return alpha.withUnsafeMutableBytes { bytes in
+                        guard let context = CGContext(data: bytes.baseAddress, width: width, height: height,
+                            bitsPerComponent: 8, bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue) else { return false }
+                        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+                        return stride(from: 3, to: bytes.count, by: 4).contains { bytes[$0] > 0 }
+                    }
+                }
+                if hit { return true }
+                x += tileSize
+            }
+            y += tileSize
+        }
+        return false
     }
 
     func selectAllContent() {

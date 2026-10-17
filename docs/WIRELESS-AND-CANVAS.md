@@ -14,6 +14,8 @@
 
 画板左上方的 **Select** 可进入对象选择模式：点击图片或笔迹，或拖框选中相交的对象；**Select all** 同时选中参考图片和所有笔迹。蓝框显示选区，点击 **Delete** 删除所选对象，**Undo** 可恢复。点击 **Done** 返回绘图和平移。删除结果会保存，撤销历史保留到 App 退出。**Clear ink** 只清笔迹；**Select export area** 只设置快照裁切范围。
 
+点选和框选检查实际墨迹（包含笔宽、变换和擦除遮罩），斜线旁或圆圈内的空白不会被当作笔迹。导出裁切也是独立编辑：先画笔迹、再改裁切时，第一次 **Undo** 只撤销裁切，下一次才撤销笔迹；新裁切会取消旧的重做分支。相机位置不参与撤销。
+
 输入区内容较长时，可滚动查看附件和文字。阅读图片回复时，收起键盘可增加可视区域。点击 **Latest / New messages** 跳到最新回复，再滚动到图片并打开。
 
 发现列表只显示运行兼容 bridge 的 Mac。首次远程发现依赖安装时写入的 MagicDNS 发现入口；本机安装配置已由脚本生成。其他 Mac 也需要运行兼容 bridge，才会进入列表。开发版安装和 XCTest 仍受 Apple 的设备授权要求约束，这与 App 的无线配对是两个流程。
@@ -65,6 +67,8 @@ An uncertain send is not automatically replayed. Keep the existing receipt and c
 ## Canvas navigation
 
 Choose the visible **Select** control to tap an image or stroke, or drag a box across the objects to select. **Select all** includes both the reference image and ink. A blue outline marks the selection. **Delete** removes selected objects; **Undo** restores them. Choose **Done** to return to drawing and navigation. Deletions persist across relaunch; undo history lasts for the current app session. **Clear ink** affects ink only, and **Select export area** sets the snapshot crop.
+
+Selection checks visible ink, including stroke width, transforms and eraser masks; empty areas beside a diagonal or inside a circle do not select that stroke. A crop change has its own chronological undo step: after drawing then changing the crop, the first **Undo** reverses the crop and the next reverses the drawing. A new crop invalidates the previous redo branch. Camera position stays independent of undo.
 
 Use one finger to pan in any direction and two fingers to pinch between 25% and 400%. Open **Canvas editing** for **Fit content**, **Actual size**, **Zoom in** and **Zoom out**. The app restores the viewport after relaunch.
 
