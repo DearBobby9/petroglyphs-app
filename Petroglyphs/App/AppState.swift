@@ -72,11 +72,23 @@ class AppState {
         guard newCodexChat === draft else { return }
         let target = CodexChatTarget(thread: thread, serverURL: draft.serverURL, host: draft.host,
                                      projectId: draft.project.id, projectName: draft.project.displayName)
-        if let selection = draft.request?.selection {
-            codexConversation.setDraftModelSelection(CodexDraftModelSelection(model: selection.model, reasoningEffort: selection.reasoningEffort), for: target)
+        guard let request = draft.request, let receipt = draft.receipt else { return }
+        do {
+            try codexConversation.handoffCreation(request, receipt: receipt, to: target)
+        } catch {
+            draft.reportHandoffFailure(error)
+            return
         }
         selectedCodexChat = target
-        draft.acknowledgeOpenedChat()
+        // Destination persistence is the handoff boundary. Repeating this operation
+        // after a crash reuses the creation ID and cannot duplicate its first message.
+        if receipt.firstMessageRequestId == nil, receipt.firstMessageState != "not_sent", receipt.state != .completed {
+            // Older bridges have no first-message receipt endpoint. Keep the original
+            // creation record available for status checks after opening its chat.
+            newCodexChat = nil
+            return
+        }
+        guard draft.acknowledgeOpenedChat() else { refreshCreationDrafts(); return }
         newCodexChat = nil
     }
 }

@@ -643,6 +643,81 @@ final class CodexConversationStoreTests: XCTestCase {
     }
 
     @MainActor
+    func testUnsentCreationHandoffPreservesExistingDraftAndIsIdempotentAcrossRestart() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = target()
+        let request = CodexCreateChatRequest(id: UUID().uuidString.lowercased(), hostId: destination.host.id,
+            projectId: "project", prompt: "Original first requirement", title: "New chat")
+        var receipt = CodexChatCreationReceipt(id: request.id, hostId: request.hostId, projectId: request.projectId,
+            state: .unknown, thread: destination.thread, error: nil, notice: nil)
+        receipt.firstMessageState = "not_sent"
+        let store = CodexConversationStore(network: ConversationNetworkFixture(), storageRoot: root)
+        store.setDraftText("Existing draft", for: destination)
+        try store.handoffCreation(request, receipt: receipt, to: destination)
+        let restored = CodexConversationStore(network: ConversationNetworkFixture(), storageRoot: root)
+        try restored.handoffCreation(request, receipt: receipt, to: destination)
+        XCTAssertEqual(restored.session(for: destination).draft.text, "Existing draft")
+        XCTAssertEqual(restored.session(for: destination).recoveredDrafts.count, 1)
+        try restored.restoreRecoveredDraft(request.id, for: destination)
+        XCTAssertEqual(restored.session(for: destination).draft.text, request.prompt)
+        XCTAssertEqual(restored.session(for: destination).recoveredDrafts.first?.draft.text, "Existing draft")
+        XCTAssertTrue(restored.session(for: destination).outgoing.isEmpty)
+    }
+
+    @MainActor
+    func testKnownCreationHandoffNeverResendsOrPermitsRetryFromMissingLegacyReceipt() async throws {
+        for firstState in ["unknown", "sent"] {
+            let root = temporaryDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let destination = target()
+            let request = CodexCreateChatRequest(id: UUID().uuidString.lowercased(), hostId: destination.host.id,
+                projectId: "project", prompt: "Original request", title: nil)
+            var receipt = CodexChatCreationReceipt(id: request.id, hostId: request.hostId, projectId: request.projectId,
+                state: .unknown, thread: destination.thread, error: nil, notice: nil)
+            receipt.firstMessageState = firstState
+            receipt.firstMessageRequestId = request.id
+            let network = ConversationNetworkFixture()
+            await network.configure(post: .accepted, receipt: .missing)
+            let store = CodexConversationStore(network: network, storageRoot: root)
+            try store.handoffCreation(request, receipt: receipt, to: destination)
+            let restored = CodexConversationStore(network: network, storageRoot: root)
+            try restored.handoffCreation(request, receipt: receipt, to: destination)
+            await restored.refresh(for: destination)
+            await restored.retryUnaccepted(request.id, for: destination)
+            XCTAssertEqual(restored.session(for: destination).outgoing.count, 1)
+            XCTAssertEqual(restored.session(for: destination).outgoing.first?.id, request.id)
+            XCTAssertFalse(restored.session(for: destination).outgoing[0].canRetry)
+            let posts = await network.requests
+            XCTAssertTrue(posts.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testCreationHandoffFailureLeavesNoPartialDestinationAssociation() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = target()
+        let directory = root.appendingPathComponent(CodexConversationKey(destination).storageID)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let bytes = Data("unreadable previous state".utf8)
+        try bytes.write(to: directory.appendingPathComponent("state.json"))
+        let request = CodexCreateChatRequest(id: UUID().uuidString.lowercased(), hostId: destination.host.id,
+            projectId: "project", prompt: "Keep at source", title: nil)
+        var receipt = CodexChatCreationReceipt(id: request.id, hostId: request.hostId, projectId: request.projectId,
+            state: .unknown, thread: destination.thread, error: nil, notice: nil)
+        receipt.firstMessageState = "not_sent"
+        let store = CodexConversationStore(network: ConversationNetworkFixture(), storageRoot: root)
+        XCTAssertThrowsError(try store.handoffCreation(request, receipt: receipt, to: destination))
+        XCTAssertTrue(store.session(for: destination).handedOffCreationIDs.isEmpty)
+        XCTAssertTrue(store.session(for: destination).draft.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: directory.appendingPathComponent("state.json")), bytes)
+        try store.preserveUnreadableState(for: destination)
+        try store.handoffCreation(request, receipt: receipt, to: destination)
+        XCTAssertEqual(store.session(for: destination).draft.text, request.prompt)
+    }
+
+    @MainActor
     func testReadingBlockAndLocalFractionSurviveRestartAndClearAtLatest() throws {
         let root = temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

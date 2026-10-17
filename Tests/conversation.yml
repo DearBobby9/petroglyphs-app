@@ -12,6 +12,7 @@ targets:
       - CodexConversationStoreTests.swift
       - CodexModelSettingsTests.swift
       - ../Petroglyphs/Models/CodexConversation.swift
+      - ../Petroglyphs/Models/CodexProject.swift
       - ../Petroglyphs/Models/CodexModelSettings.swift
       - ../Petroglyphs/Models/CodexHost.swift
       - ../Petroglyphs/Models/CodexThread.swift

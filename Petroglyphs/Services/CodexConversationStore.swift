@@ -9,6 +9,8 @@ final class CodexConversationSession {
     var draft = CodexMessageDraft()
     var history: [CodexConversationMessage] = []
     var outgoing: [CodexLocalMessage] = []
+    var recoveredDrafts: [CodexRecoveredDraft] = []
+    var handedOffCreationIDs: Set<String> = []
     var beforeCursor: String?
     var runState = "unknown"
     var receipts: [String: CodexMessageReceipt] = [:]
@@ -84,6 +86,8 @@ final class CodexConversationStore {
                     if !item.state.isTerminal && !item.canRetry { item.state = .unknown }
                     return item
                 }
+                session.recoveredDrafts = stored.recoveredDrafts ?? []
+                session.handedOffCreationIDs = Set(stored.handedOffCreationIDs ?? [])
                 session.readingMessageID = stored.readingMessageID
                 session.readingBlockID = stored.readingBlockID
                 session.readingBlockFraction = stored.readingBlockFraction
@@ -112,6 +116,50 @@ final class CodexConversationStore {
         }
         sessions[key] = session
         return session
+    }
+
+    func handoffCreation(_ request: CodexCreateChatRequest, receipt: CodexChatCreationReceipt, to target: CodexChatTarget) throws {
+        let session = session(for: target)
+        guard request.id == receipt.id, request.hostId == target.host.id,
+              receipt.hostId == target.host.id, request.projectId == receipt.projectId,
+              receipt.thread?.id == target.thread.id else { throw ConversationError.wrongDestination }
+        if session.handedOffCreationIDs.contains(request.id) { return }
+        let previous = (session.draft, session.outgoing, session.recoveredDrafts, session.handedOffCreationIDs)
+        let selection = request.selection.map { CodexDraftModelSelection(model: $0.model, reasoningEffort: $0.reasoningEffort) }
+        let draft = CodexMessageDraft(text: request.prompt, modelSelection: selection)
+        if receipt.firstMessageState == "not_sent" {
+            if session.draft.isEmpty { session.draft = draft }
+            else { session.recoveredDrafts.append(CodexRecoveredDraft(id: request.id, draft: draft, createdAt: Date())) }
+        } else {
+            let id = receipt.firstMessageRequestId ?? request.id
+            if !session.outgoing.contains(where: { $0.id == id }) {
+                var local = CodexLocalMessage(id: id, text: request.prompt, attachments: [], createdAt: Date(),
+                    state: receipt.firstMessageState == "sent" || receipt.state == .completed ? .queued : .unknown,
+                    notice: "This is the original first message. Check its receipt before sending it again.", selection: request.selection)
+                local.sourceCreationID = request.id
+                session.outgoing.append(local)
+            }
+            if session.draft.modelSelection == nil { session.draft.modelSelection = selection }
+        }
+        session.handedOffCreationIDs.insert(request.id)
+        do { try save(session); session.draftError = nil }
+        catch {
+            (session.draft, session.outgoing, session.recoveredDrafts, session.handedOffCreationIDs) = previous
+            throw error
+        }
+    }
+
+    func restoreRecoveredDraft(_ id: String, for target: CodexChatTarget) throws {
+        let session = session(for: target)
+        guard let item = session.recoveredDrafts.first(where: { $0.id == id }) else { return }
+        let previous = (session.draft, session.recoveredDrafts)
+        session.recoveredDrafts.removeAll { $0.id == id }
+        if !session.draft.isEmpty {
+            session.recoveredDrafts.append(CodexRecoveredDraft(id: UUID().uuidString.lowercased(), draft: session.draft, createdAt: Date()))
+        }
+        session.draft = item.draft
+        do { try save(session) }
+        catch { (session.draft, session.recoveredDrafts) = previous; throw error }
     }
 
     func setDraftText(_ text: String, for target: CodexChatTarget) {
@@ -409,6 +457,10 @@ final class CodexConversationStore {
         } catch {
             guard let index = session.outgoing.firstIndex(where: { $0.id == id }) else { return }
             if case NetworkService.NetworkError.server(let code, _) = error, code == 404 {
+                if session.outgoing[index].sourceCreationID != nil {
+                    session.outgoing[index].notice = "The original first-message receipt is unavailable. Check the creation record or this chat in Codex in ChatGPT Desktop before sending again."
+                    return
+                }
                 session.outgoing[index].state = .failed
                 session.outgoing[index].canRetry = true
                 session.outgoing[index].notice = nil
@@ -474,6 +526,7 @@ final class CodexConversationStore {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let saved = SavedConversation(version: 2, draft: session.draft, outgoing: session.outgoing,
                                       readingMessageID: session.readingMessageID, isAtBottom: session.isAtBottom,
+                                      recoveredDrafts: session.recoveredDrafts, handedOffCreationIDs: Array(session.handedOffCreationIDs),
                                       readingBlockID: session.readingBlockID, readingBlockFraction: session.readingBlockFraction)
         try JSONEncoder().encode(saved).write(to: directory.appendingPathComponent("state.json"), options: .atomic)
     }
@@ -508,6 +561,8 @@ final class CodexConversationStore {
         let outgoing: [CodexLocalMessage]
         let readingMessageID: String?
         let isAtBottom: Bool
+        var recoveredDrafts: [CodexRecoveredDraft]? = nil
+        var handedOffCreationIDs: [String]? = nil
         var readingBlockID: String? = nil
         var readingBlockFraction: Double? = nil
     }

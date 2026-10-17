@@ -400,6 +400,25 @@ private struct CodexMessageComposer: View {
     var body: some View {
         CodexComposerScroll(maximumHeight: maximumHeight) {
         VStack(alignment: .leading, spacing: 8) {
+            if !session.recoveredDrafts.isEmpty {
+                DisclosureGroup("Recovered messages · \(session.recoveredDrafts.count)") {
+                    ForEach(session.recoveredDrafts) { recovered in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(recovered.draft.text).font(.caption).lineLimit(3)
+                            Text("\(recovered.draft.attachments.count) images").font(.caption2).foregroundStyle(.secondary)
+                            Button("Edit this message") {
+                                do { try store.restoreRecoveredDraft(recovered.id, for: target) }
+                                catch { session.draftError = error.localizedDescription }
+                            }
+                            .frame(minHeight: 44)
+                        }
+                    }
+                    Text("Your current draft will stay in this list when you switch.").font(.caption).foregroundStyle(.secondary)
+                }
+                .font(.callout)
+                .accessibilityIdentifier("chat.recoveredDrafts")
+            }
+
             if !session.draft.attachments.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing: 10) {

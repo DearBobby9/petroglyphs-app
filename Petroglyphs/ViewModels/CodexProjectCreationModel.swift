@@ -261,12 +261,23 @@ final class CodexProjectCreationModel {
         }
     }
 
-    func acknowledgeOpenedChat() {
-        guard createdThread != nil || recoverableThread != nil else { return }
-        hasOpenedChat = true
-        activeStatusObserver = nil
-        isObservingCreation = false
-        try? FileManager.default.removeItem(at: fileURL)
+    @discardableResult
+    func acknowledgeOpenedChat() -> Bool {
+        guard createdThread != nil || recoverableThread != nil else { return false }
+        do {
+            if FileManager.default.fileExists(atPath: fileURL.path) { try FileManager.default.removeItem(at: fileURL) }
+            hasOpenedChat = true
+            activeStatusObserver = nil
+            isObservingCreation = false
+            return true
+        } catch {
+            storageError = "The chat was opened, but the creation record could not be cleared. It remains available in Drafts and pending."
+            return false
+        }
+    }
+
+    func reportHandoffFailure(_ error: Error) {
+        storageError = "The original requirement could not be saved in the chat. This creation record has been kept. \(error.localizedDescription)"
     }
 
     func editFailedAttempt() {

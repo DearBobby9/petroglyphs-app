@@ -48,6 +48,10 @@ struct CodexChatCreationReceipt: Codable, Equatable {
     var canRetry: Bool? = nil
     var failureCode: String? = nil
     var creationMethod: String? = nil
+    var firstMessageState: String? = nil
+    var firstMessageRequestId: String? = nil
+    var firstTurnId: String? = nil
+    var firstMessageId: String? = nil
 }
 
 struct CodexCreationRetryRequest: Codable, Equatable {

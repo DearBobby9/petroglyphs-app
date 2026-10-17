@@ -91,7 +91,7 @@ struct CodexNewChatPanel: View {
                             .frame(minHeight: 44).disabled(model.isBusy)
                             .accessibilityIdentifier("codex.checkCreation")
                     }
-                    if let thread = model.recoverableThread {
+                    if let thread = model.createdThread ?? model.recoverableThread {
                         Button("Open created chat") { onCreated(thread) }
                             .buttonStyle(.borderedProminent)
                             .frame(minHeight: 44)

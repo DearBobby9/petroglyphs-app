@@ -167,6 +167,7 @@ struct CodexLocalMessage: Codable, Identifiable {
     var canRetry = false
     var appearedInHistory = false
     let selection: CodexModelSelection?
+    var sourceCreationID: String? = nil
 
     init(id: String, text: String, attachments: [CodexDraftAttachment], createdAt: Date,
          state: CodexMessageState, error: String? = nil, notice: String? = nil,
@@ -188,4 +189,10 @@ struct CodexLocalMessage: Codable, Identifiable {
                                  phase: "user", createdAt: createdAt, state: state,
                                  attachments: attachments.map(\.messageAttachment))
     }
+}
+
+struct CodexRecoveredDraft: Codable, Identifiable {
+    let id: String
+    let draft: CodexMessageDraft
+    let createdAt: Date
 }
