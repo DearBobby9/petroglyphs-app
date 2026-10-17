@@ -22,6 +22,8 @@ struct CodexRepliesPanel: View {
     var reservesTopTrailingControl = false
     var onConnectionSettings: () -> Void = {}
     var onCanvasFilename: () -> String = { "Canvas.png" }
+    var onRefreshTarget: () -> Void = {}
+    var sendUnavailableReason: String? = nil
     var onShowDrafts: () -> Void = {}
     @State private var showDiagnostics = false
 
@@ -84,6 +86,7 @@ struct CodexRepliesPanel: View {
                     if let newChat { Task { await newChat.checkStatus() } }
                     else if let target { Task { await store.refresh(for: target) } }
                     onRefreshModels()
+                    onRefreshTarget()
                 } label: { Label(newChat == nil ? "Refresh conversation" : "Refresh creation status", systemImage: "arrow.clockwise") }
                 .disabled((target == nil && newChat == nil) || (newChat?.isBusy ?? (session?.isRefreshing == true)))
                 .accessibilityIdentifier("codex.refreshReplies")
@@ -165,7 +168,8 @@ struct CodexRepliesPanel: View {
             CodexMessageComposer(store: store, target: target, session: session,
                                  canSend: canSend, onAddCanvas: onAddCanvas,
                                  onFocusChanged: onComposerFocusChanged,
-                                 modelSettings: modelSettings, onRefreshModels: onRefreshModels, onCanvasFilename: onCanvasFilename)
+                                 modelSettings: modelSettings, onRefreshModels: onRefreshModels, onCanvasFilename: onCanvasFilename,
+                                 sendUnavailableReason: sendUnavailableReason)
                 .chatChromeHeight("composer")
         }
     }
@@ -400,6 +404,7 @@ private struct CodexMessageComposer: View {
     let modelSettings: CodexModelSettingsModel
     let onRefreshModels: () -> Void
     let onCanvasFilename: () -> String
+    let sendUnavailableReason: String?
     @State private var previewAttachment: CodexDraftAttachment?
     @State private var showPhotos = false
     @State private var showFiles = false
@@ -483,7 +488,7 @@ private struct CodexMessageComposer: View {
                 return !providers.isEmpty
             }
             if !canSend {
-                Text("Reconnect to your Mac to send. Your draft is saved.").font(.caption).foregroundStyle(.secondary)
+                Text(sendUnavailableReason ?? "The selected chat is unavailable. Your draft is saved.").font(.caption).foregroundStyle(.secondary)
             } else if session.isBusy {
                 Text("Your next message will wait for the current turn.").font(.caption).foregroundStyle(.secondary)
             }

@@ -97,7 +97,7 @@ struct CanvasPageView: View {
             return connectionMonitor.isConnected ? "Checking destination…" : "Waiting for the server connection…"
         }
         if requiresThread && !connectionMonitor.isConnected {
-            return "Reconnect to your Mac to send. Your drawing stays here."
+            return "The Mac bridge is unreachable. Your drawing and draft stay here."
         }
         if requiresThread, let newChat {
             if newChat.request != nil { return "The first message has been submitted. Check its status in chat." }
@@ -112,6 +112,7 @@ struct CanvasPageView: View {
         if requiresThread && selectedTarget == nil {
             return "Choose a Codex chat before sending."
         }
+        if requiresThread, let error = appState.targetError { return error }
         if requiresThread, let reason = selectedTarget?.host.unavailabilityReason {
             return reason
         }
@@ -170,7 +171,7 @@ struct CanvasPageView: View {
                                 modelSettings: modelSettings,
                                 isConnected: connectionMonitor.isConnected,
                                 isFocused: chatFillsPage,
-                                canSend: connectionMonitor.isConnected && selectedTarget?.host.canSelect == true,
+                                canSend: connectionMonitor.isConnected && appState.canSendToSelectedTarget,
                                 onChooseChat: chooseChat,
                                 onNewChat: chooseNewChatProject,
                                 onCancelNewChat: { dismissComposer(); appState.newCodexChat = nil },
@@ -188,6 +189,10 @@ struct CanvasPageView: View {
                                 reservesTopTrailingControl: chatFillsPage || (useSidebar && chatSide == .right),
                                 onConnectionSettings: { showConnectionSettings = true },
                                 onCanvasFilename: { vm.snapshotFilename },
+                                onRefreshTarget: { Task { await appState.refreshSelectedTarget() } },
+                                sendUnavailableReason: connectionMonitor.isConnected
+                                    ? (appState.targetError ?? selectedTarget?.host.unavailabilityReason)
+                                    : "The Mac bridge is unreachable. Your draft is saved.",
                                 onShowDrafts: { appState.refreshCreationDrafts(); showSavedDrafts = true }
                             )
                         }
@@ -245,6 +250,10 @@ struct CanvasPageView: View {
         .task(id: ConversationRequest(target: newChat == nil ? selectedTarget : nil, isActive: scenePhase == .active)) {
             guard scenePhase == .active, newChat == nil, let target = selectedTarget else { return }
             await appState.codexConversation.observe(target: target)
+        }
+        .task(id: "\(selectedTarget.map { CodexConversationKey($0).storageID } ?? "none"):\(scenePhase == .active):\(connectionMonitor.isConnected)") {
+            guard scenePhase == .active, connectionMonitor.isConnected, newChat == nil else { return }
+            await appState.refreshSelectedTarget()
         }
         .task(id: modelSettingsRequest) {
             let request = modelSettingsRequest

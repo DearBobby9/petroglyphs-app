@@ -11,6 +11,8 @@ targets:
     sources:
       - CodexProjectModelsTests.swift
       - CodexRecentChatStoreTests.swift
+      - CodexTargetAvailabilityTests.swift
+      - ../Petroglyphs/ViewModels/CodexTargetAvailabilityModel.swift
       - ../Petroglyphs/Services/CodexRecentChatStore.swift
       - ../Petroglyphs/Models/CodexProject.swift
       - ../Petroglyphs/Models/CodexModelSettings.swift

@@ -12,9 +12,15 @@ class AppState {
     private(set) var creationDrafts: [CodexCreationDraftSummary] = []
     var currentPage: AppPage = .landing
     private let recentChatStore = CodexRecentChatStore()
+    private let targetAvailability = CodexTargetAvailabilityModel()
+    private var selectedTargetGeneration = UUID()
+    var targetError: String? { targetAvailability.matches(selectedCodexChat) ? targetAvailability.error : nil }
+    var isCheckingTarget: Bool { targetAvailability.matches(selectedCodexChat) && targetAvailability.isLoading }
+    var canSendToSelectedTarget: Bool { selectedCodexChat?.host.canSelect == true && targetError == nil }
     var recentCodexChats: [CodexChatTarget] { recentChatStore.targets }
     var selectedCodexChat: CodexChatTarget? {
         didSet {
+            selectedTargetGeneration = UUID()
             if let selectedCodexChat, let data = try? JSONEncoder().encode(selectedCodexChat) {
                 UserDefaults.standard.set(data, forKey: "selectedCodexChat")
                 recentChatStore.remember(selectedCodexChat)
@@ -46,6 +52,14 @@ class AppState {
         }
         if let selectedCodexChat { recentChatStore.remember(selectedCodexChat) }
         refreshCreationDrafts()
+    }
+
+    func refreshSelectedTarget() async {
+        guard let original = selectedCodexChat else { return }
+        let generation = selectedTargetGeneration
+        let refreshed = await targetAvailability.refresh(for: original)
+        guard selectedTargetGeneration == generation else { return }
+        if let refreshed { selectedCodexChat = refreshed }
     }
 
     func refreshCreationDrafts() { creationDrafts = CodexProjectCreationModel.savedDrafts() }
