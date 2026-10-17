@@ -23,7 +23,7 @@ struct ServerSettingsSheet: View {
     enum Mode: String, CaseIterable {
         case local = "local"
         case cloud = "cloud"
-        var label: String { self == .local ? "Local" : "Cloud" }
+        var label: String { self == .local ? "Paired Mac" : "Legacy cloud" }
     }
 
     private let cloudURL = "https://web-production-d8b49.up.railway.app"
@@ -108,7 +108,7 @@ struct ServerSettingsSheet: View {
                             .submitLabel(.done)
                             .onSubmit { focusedField = nil }
                     } header: {
-                        Text("MCP Server URL")
+                        Text("Paired Mac address")
                     } footer: {
                         Text("Use the paired URL from your Mac. After the first connection, Petroglyphs reconnects over the local network and uses Tailscale when needed. Keep Tailscale connected on both devices.")
                     }
@@ -124,7 +124,7 @@ struct ServerSettingsSheet: View {
                     } header: {
                         Text("Pairing Code")
                     } footer: {
-                        Text("Ask your AI to call get_pairing_code, then enter the 4-letter code to link your session.")
+                        Text("Legacy submission service. This route does not select a remote Codex machine. Use a paired Mac for Codex conversations.")
                     }
                 }
 
@@ -161,7 +161,7 @@ struct ServerSettingsSheet: View {
             }
             .listStyle(.insetGrouped)
             .animation(.default, value: editingMode)
-            .navigationTitle("Server")
+            .navigationTitle("Connect to Mac")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

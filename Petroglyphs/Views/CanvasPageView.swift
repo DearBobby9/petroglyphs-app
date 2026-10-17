@@ -14,6 +14,7 @@ struct CanvasPageView: View {
     @AppStorage("codexChatWidthFraction") private var chatWidthFraction = CanvasChatFrames.defaultChatFraction
     @AppStorage("codexCanvasCollapsed") private var chatFocused = false
     private var vm: CanvasViewModel { appState.canvasViewModel }
+    @State private var showConnectionSettings = false
     @State private var showSavedDrafts = false
     @State private var pickerServer: PickerServer?
     @State private var showBackgroundPicker = false
@@ -81,7 +82,7 @@ struct CanvasPageView: View {
     }
 
     private var connectionMessage: String? {
-        guard connectionMonitor.serverURL != nil else { return "Connect to a server from the home screen." }
+        guard connectionMonitor.serverURL != nil else { return "Open Connection settings to connect your Mac." }
         guard let requiresThread = connectionMonitor.requiresCodexThread else {
             return connectionMonitor.isConnected ? "Checking destination…" : "Waiting for the server connection…"
         }
@@ -166,6 +167,7 @@ struct CanvasPageView: View {
                                 onExpand: { toggleChatFocus(isFillingPage: chatFillsPage) },
                                 layoutControls: controls,
                                 reservesTopTrailingControl: chatFillsPage || (useSidebar && chatSide == .right),
+                                onConnectionSettings: { showConnectionSettings = true },
                                 onShowDrafts: { appState.refreshCreationDrafts(); showSavedDrafts = true }
                             )
                         }
@@ -251,6 +253,7 @@ struct CanvasPageView: View {
                                   })
                 .presentationDetents([.large])
         }
+        .sheet(isPresented: $showConnectionSettings) { ServerSettingsSheet() }
         .sheet(isPresented: $showSavedDrafts) {
             CodexDraftsSheet {
                 if let url = connectionMonitor.serverURL {
@@ -394,8 +397,14 @@ struct CanvasPageView: View {
                     .accessibilityLabel("Canvas editing")
                     .accessibilityIdentifier("canvas.editing")
 
-                    ConnectionDot(isConnected: connectionMonitor.isConnected)
-                        .padding(.top, 18)
+                    Button { showConnectionSettings = true } label: {
+                        ConnectionDot(isConnected: connectionMonitor.isConnected)
+                            .frame(width: 44, height: 44)
+                            .background(Color.sandstone.opacity(0.9), in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Connection settings")
+                    .accessibilityIdentifier("canvas.connectionSettings")
                     Spacer()
                 }
                 .padding(.horizontal, 16)

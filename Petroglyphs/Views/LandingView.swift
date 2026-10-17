@@ -19,7 +19,7 @@ struct LandingView: View {
                         .font(.caveat(60, weight: .bold))
                         .foregroundStyle(Color.charcoal)
                         .fixedSize(horizontal: true, vertical: false)
-                    Text("A handwriting keyboard for AI")
+                    Text("Draw, discuss, and build with Codex")
                         .font(.rounded(18))
                         .foregroundStyle(.secondary)
                 }
@@ -29,22 +29,28 @@ struct LandingView: View {
                 // Connection status
                 HStack(spacing: 8) {
                     ConnectionDot(isConnected: connectionMonitor.isConnected)
-                    Text(connectionMonitor.isConnected ? "Connected to server" : "No server connection")
+                    Text(connectionMonitor.isConnected ? "Connected to Mac bridge" : "Mac bridge disconnected")
                         .font(.rounded(14))
                         .foregroundStyle(.secondary)
                 }
                 .padding(.bottom, 28)
 
                 // Enter button
-                OchreButton("Enter") {
-                    appState.currentPage = .canvas
+                OchreButton(connectionMonitor.isConnected ? "Open workspace" : "Connect to Mac") {
+                    if connectionMonitor.isConnected { appState.currentPage = .canvas }
+                    else { showServer = true }
                 }
                 .frame(width: 200)
                 .padding(.bottom, 40)
 
+                if !connectionMonitor.isConnected {
+                    Button("Open saved workspace") { appState.currentPage = .canvas }
+                        .frame(minHeight: 44).padding(.bottom, 16)
+                }
+
                 // Setting tiles
                 HStack(spacing: 16) {
-                    SettingTile(icon: "network", label: "Server") {
+                    SettingTile(icon: "network", label: "Connection") {
                         showServer = true
                     }
                     SettingTile(icon: "gearshape.fill", label: "Settings") {
