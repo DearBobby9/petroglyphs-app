@@ -8,14 +8,12 @@ struct CanvasPageView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("pairingCode") private var pairingCode: String = ""
-    @AppStorage("hasSeenClearHint") private var hasSeenClearHint: Bool = false
     @AppStorage("darkModeEnabled") private var darkModeEnabled = false
     @AppStorage("codexRepliesExpanded") private var repliesExpanded = true
     @AppStorage("codexChatSide") private var chatSideRawValue = CanvasChatSide.right.rawValue
     @AppStorage("codexChatWidthFraction") private var chatWidthFraction = CanvasChatFrames.defaultChatFraction
     @AppStorage("codexCanvasCollapsed") private var chatFocused = false
     private var vm: CanvasViewModel { appState.canvasViewModel }
-    @State private var showClearHint = false
     @State private var pickerServer: PickerServer?
     @State private var showBackgroundPicker = false
     @State private var composerFocused = false
@@ -209,11 +207,6 @@ struct CanvasPageView: View {
                 .padding(.horizontal, 16)
             }
         }
-        .onAppear {
-            if !hasSeenClearHint {
-                showClearHint = true
-            }
-        }
         .task(id: ConversationRequest(target: newChat == nil ? selectedTarget : nil, isActive: scenePhase == .active)) {
             guard scenePhase == .active, newChat == nil, let target = selectedTarget else { return }
             await appState.codexConversation.observe(target: target)
@@ -348,12 +341,6 @@ struct CanvasPageView: View {
             // Overlays
             WipeAnimationOverlay(isShowing: $vm.showWipeAnimation)
             CastSuccessOverlay(isShowing: $vm.showCastSuccess)
-            if showClearHint {
-                SwipeToClearHint(isShowing: $showClearHint)
-                    .onChange(of: showClearHint) { _, showing in
-                        if !showing { hasSeenClearHint = true }
-                    }
-            }
 
             // Home button + connection dot (top-leading)
             VStack {
@@ -374,6 +361,25 @@ struct CanvasPageView: View {
                     backgroundControl
 
                     darkModeControl
+
+                    Menu {
+                        Button("Undo", systemImage: "arrow.uturn.backward") { vm.undo() }
+                            .disabled(!vm.canUndo).keyboardShortcut("z", modifiers: .command)
+                        Button("Redo", systemImage: "arrow.uturn.forward") { vm.redo() }
+                            .disabled(!vm.canRedo).keyboardShortcut("z", modifiers: [.command, .shift])
+                        Divider()
+                        Button("Clear ink", systemImage: "trash", role: .destructive) {
+                            vm.clear()
+                            triggerClearHaptic()
+                        }
+                        .disabled(vm.drawing.strokes.isEmpty)
+                        Text("Undo is available while this app stays open. Saved ink is restored after restart.")
+                    } label: {
+                        Image(systemName: "pencil.and.outline").frame(width: 44, height: 44)
+                            .background(Color.sandstone.opacity(0.9), in: Circle())
+                    }
+                    .accessibilityLabel("Canvas editing")
+                    .accessibilityIdentifier("canvas.editing")
 
                     ConnectionDot(isConnected: connectionMonitor.isConnected)
                         .padding(.top, 18)

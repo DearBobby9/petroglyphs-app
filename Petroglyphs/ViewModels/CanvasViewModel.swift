@@ -8,15 +8,13 @@ final class CanvasViewModel {
     private let storageURL: URL
     private var protectsUnreadableDocument = false
     private(set) var storageError: String?
+    private var undoDrawings: [PKDrawing] = []
+    private var redoDrawings: [PKDrawing] = []
+    private var lastDrawingGestureID: UUID?
 
     var drawing: PKDrawing {
         get { document.drawing }
-        set {
-            guard newValue != document.drawing else { return }
-            document.drawing = newValue
-            document.exportBounds = CanvasDocument.isValid(newValue.bounds) ? newValue.bounds : CanvasDocument.emptyBounds
-            documentChanged()
-        }
+        set { updateDrawing(newValue) }
     }
 
     var background: CanvasBackground {
@@ -32,6 +30,8 @@ final class CanvasViewModel {
     var revision: Int { document.revision }
     var exportBounds: CGRect { document.exportBounds }
     var snapshotFilename: String { "canvas-\(documentID.uuidString.lowercased())-r\(revision).png" }
+    var canUndo: Bool { !undoDrawings.isEmpty }
+    var canRedo: Bool { !redoDrawings.isEmpty }
 
     var showCastSuccess = false
     var showWipeAnimation = false
@@ -80,9 +80,43 @@ final class CanvasViewModel {
         document.drawing.exportPNG(backgroundColor: document.background.uiColor, exportBounds: document.exportBounds)
     }
 
-    private func documentChanged() {
+    private func documentChanged(saveImmediately: Bool = true) {
         document.revision += 1
-        save()
+        if saveImmediately { save() }
+    }
+
+    // One tool gesture can deliver several drawing updates, including a final
+    // update after tool-up. Keep its first snapshot as the undo boundary.
+    func updateDrawing(_ drawing: PKDrawing, gestureID: UUID? = nil, saveImmediately: Bool = true) {
+        guard drawing != document.drawing else { return }
+        if gestureID == nil || gestureID != lastDrawingGestureID {
+            undoDrawings.append(document.drawing)
+            if undoDrawings.count > 100 { undoDrawings.removeFirst() }
+            redoDrawings.removeAll()
+        }
+        lastDrawingGestureID = gestureID
+        replaceDrawing(drawing, saveImmediately: saveImmediately)
+    }
+
+    func undo() {
+        guard let previous = undoDrawings.popLast() else { return }
+        redoDrawings.append(document.drawing)
+        lastDrawingGestureID = nil
+        replaceDrawing(previous)
+    }
+
+    func redo() {
+        guard let next = redoDrawings.popLast() else { return }
+        undoDrawings.append(document.drawing)
+        lastDrawingGestureID = nil
+        replaceDrawing(next)
+    }
+
+    private func replaceDrawing(_ drawing: PKDrawing, saveImmediately: Bool = true) {
+        document.drawing = drawing
+        document.exportBounds = CanvasDocument.isValid(drawing.bounds) ? drawing.bounds : CanvasDocument.emptyBounds
+        if !drawing.strokes.isEmpty { onFirstStroke() }
+        documentChanged(saveImmediately: saveImmediately)
     }
 
     func onFirstStroke() {
@@ -163,11 +197,13 @@ final class CanvasViewModel {
     }
 
     func clear() {
+        guard !drawing.strokes.isEmpty else { return }
+        drawing = PKDrawing()
         showWipeAnimation = true
         drawingStartTime = nil
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            self.drawing = PKDrawing()
-            self.showWipeAnimation = false
+        Task {
+            try? await Task.sleep(for: .milliseconds(500))
+            showWipeAnimation = false
         }
     }
 }

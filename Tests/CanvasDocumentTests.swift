@@ -3,6 +3,59 @@ import PencilKit
 
 final class CanvasDocumentTests: XCTestCase {
     @MainActor
+    func testClearRemovesInkSynchronously() {
+        let model = CanvasViewModel(storageURL: temporaryStorage())
+        model.drawing = makeDrawing()
+        model.clear()
+        XCTAssertTrue(model.drawing.strokes.isEmpty, "The clear operation must finish before new Pencil input is accepted.")
+    }
+
+    @MainActor
+    func testClearThenDrawUndoAndRedoFollowEditOrder() throws {
+        let model = CanvasViewModel(storageURL: temporaryStorage())
+        model.drawing = makeDrawing()
+        let original = model.drawing
+        model.clear()
+        model.drawing = makeDrawing(ink: .blue)
+        model.undo()
+        XCTAssertTrue(model.drawing.strokes.isEmpty, "Undo the new stroke before undoing clear.")
+        model.undo()
+        XCTAssertEqual(model.drawing.strokes.first?.ink.color, original.strokes.first?.ink.color)
+        XCTAssertEqual(model.drawing.strokes.first?.path.map(\.location), original.strokes.first?.path.map(\.location))
+        model.redo()
+        XCTAssertTrue(model.drawing.strokes.isEmpty)
+        model.redo()
+        XCTAssertEqual(model.drawing.strokes.first?.ink.color, UIColor.blue)
+        model.undo()
+        model.drawing = makeDrawing(ink: .red)
+        XCTAssertFalse(model.canRedo, "Editing after undo must discard the replaced redo branch.")
+    }
+
+    @MainActor
+    func testToolUpdatesAndFinalCallbackShareOneUndoBoundary() {
+        let storage = temporaryStorage()
+        let model = CanvasViewModel(storageURL: storage)
+        let firstGesture = UUID()
+        model.updateDrawing(makeDrawing(), gestureID: firstGesture, saveImmediately: false)
+        model.save()
+        let completed = PKDrawing(strokes: makeDrawing().strokes + makeDrawing(ink: .blue).strokes)
+        model.updateDrawing(completed, gestureID: firstGesture)
+        let secondGesture = UUID()
+        model.updateDrawing(PKDrawing(strokes: completed.strokes + makeDrawing(ink: .red).strokes), gestureID: secondGesture)
+        model.undo()
+        XCTAssertEqual(model.drawing.strokes.count, 2)
+        model.undo()
+        XCTAssertTrue(model.drawing.strokes.isEmpty)
+        XCTAssertFalse(model.canUndo)
+        model.redo()
+        XCTAssertEqual(model.drawing.strokes.count, 2)
+        let restored = CanvasViewModel(storageURL: storage)
+        XCTAssertEqual(restored.drawing.strokes.count, 2)
+        XCTAssertFalse(restored.canUndo, "Only the latest drawing is persisted; undo history lasts for this app session.")
+        XCTAssertFalse(restored.canRedo)
+    }
+
+    @MainActor
     func testNewModelRestoresEditableDrawing() throws {
         let storage = temporaryStorage()
         let original = CanvasViewModel(storageURL: storage)
@@ -98,12 +151,12 @@ final class CanvasDocumentTests: XCTestCase {
         return directory.appending(path: "active.json")
     }
 
-    private func makeDrawing() -> PKDrawing {
+    private func makeDrawing(ink: UIColor = .black) -> PKDrawing {
         let points = [20, 40, 60, 80, 100].enumerated().map { index, x in
             PKStrokePoint(location: CGPoint(x: x, y: 40), timeOffset: Double(index) * 0.1,
                           size: CGSize(width: 8, height: 8), opacity: 1, force: 1, azimuth: 0, altitude: .pi / 2)
         }
         let path = PKStrokePath(controlPoints: points, creationDate: Date(timeIntervalSince1970: 1_000))
-        return PKDrawing(strokes: [PKStroke(ink: PKInk(.pen, color: .black), path: path)])
+        return PKDrawing(strokes: [PKStroke(ink: PKInk(.pen, color: ink), path: path)])
     }
 }
