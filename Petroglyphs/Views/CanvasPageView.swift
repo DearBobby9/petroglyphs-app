@@ -114,7 +114,7 @@ struct CanvasPageView: View {
             Color.limestone.ignoresSafeArea()
             GeometryReader { geometry in
                 let useSidebar = CanvasChatFrames.supportsSideBySide(in: geometry.size, accessibilityText: dynamicTypeSize.isAccessibilitySize)
-                let chatFillsPage = hasReplyPanel && repliesExpanded && (chatFocused || (composerFocused && !useSidebar))
+                let chatFillsPage = hasReplyPanel && repliesExpanded && chatFocused
                 let availableSize = CGSize(width: max(0, geometry.size.width - 32), height: max(0, geometry.size.height - 24))
                 let stackedChatHeight = CanvasChatFrames.preferredStackedHeight(in: availableSize.height)
                 let mode: CanvasChatLayoutMode = !hasReplyPanel ? .canvasOnly : (useSidebar ? .sideBySide : .stacked)
