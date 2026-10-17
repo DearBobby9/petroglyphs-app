@@ -32,7 +32,7 @@ struct CodexRepliesPanel: View {
                                   onCancel: onCancelNewChat, onChooseDestination: onNewChat,
                                   onRefreshModels: onRefreshModels, onFocusChanged: onComposerFocusChanged,
                                   onCreated: { onCreated($0, newChat) })
-                    .id("\(newChat.serverURL.absoluteString):\(newChat.host.id):\(newChat.project.id)")
+                    .id(newChat.draftID)
             } else if let target, let session {
                 chatContents(target: target, session: session)
                     .id(session.key)

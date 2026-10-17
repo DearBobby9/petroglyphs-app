@@ -23,6 +23,8 @@ targets:
       - ../Petroglyphs/Services/BridgeTransport.swift
       - ../Petroglyphs/Services/NetworkService.swift
       - ../Petroglyphs/Services/NetworkService+Projects.swift
+      - ../Petroglyphs/Services/NetworkService+ModelSettings.swift
+      - ../Petroglyphs/ViewModels/CodexModelSettingsModel.swift
       - ../Petroglyphs/ViewModels/CodexThreadListModel.swift
       - ../Petroglyphs/ViewModels/CodexProjectListModel.swift
       - ../Petroglyphs/ViewModels/CodexProjectCreationModel.swift

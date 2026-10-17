@@ -698,6 +698,47 @@ final class CodexProjectModelsTests: XCTestCase {
     }
 
     @MainActor
+    func testDestinationChangeKeepsDraftIdentityAndDoesNotLoadOrOverwriteAnotherDraft() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ProjectNetworkFixture()
+        let first = creation(network, root: root)
+        first.prompt = "Carry this requirement"
+        first.title = "First draft"
+        first.modelSelection = CodexDraftModelSelection(model: "model-a", reasoningEffort: "high")
+        let second = creation(network, root: root, projectID: "project-b")
+        second.prompt = "Unrelated B draft"
+        let originalID = first.draftID
+        XCTAssertTrue(first.changeDestination(project: second.project, host: second.host, serverURL: second.serverURL))
+        XCTAssertEqual(first.draftID, originalID)
+        XCTAssertEqual(first.prompt, "Carry this requirement")
+        XCTAssertEqual(first.title, "First draft")
+        XCTAssertTrue(first.destinationNeedsValidation)
+        XCTAssertFalse(first.canSubmit)
+        let reopened = CodexProjectCreationModel(project: second.project, host: second.host, serverURL: server,
+            network: network, storageRoot: root, draftID: originalID)
+        XCTAssertEqual(reopened.project.id, second.project.id)
+        XCTAssertEqual(reopened.prompt, first.prompt)
+        XCTAssertEqual(creation(network, root: root, projectID: "project-b").prompt, "Unrelated B draft")
+    }
+
+    @MainActor
+    func testSubmittedDraftCannotBeRetargeted() async throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let network = ProjectNetworkFixture()
+        await network.configure(post: .timeout, receipt: .unknown)
+        let first = creation(network, root: root)
+        first.prompt = "Immutable requirement"
+        await first.submit()
+        let original = first.request
+        let second = creation(network, root: root, projectID: "another")
+        XCTAssertFalse(first.changeDestination(project: second.project, host: second.host, serverURL: second.serverURL))
+        XCTAssertEqual(first.request, original)
+        XCTAssertEqual(first.project.id, original?.projectId)
+    }
+
+    @MainActor
     private func creation(_ network: ProjectNetworkFixture, root: URL, host: String = "local", projectID: String = "project-local", base: URL? = nil) -> CodexProjectCreationModel {
         CodexProjectCreationModel(
             project: CodexProject(id: projectID, name: "Project", path: "/project", canCreate: true, reason: nil),

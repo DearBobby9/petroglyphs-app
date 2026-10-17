@@ -60,4 +60,5 @@ struct CodexNewChatDestination: Codable {
     let serverURL: URL
     let host: CodexHost
     let project: CodexProject
+    var draftID: String? = nil
 }

@@ -5,8 +5,11 @@ import Observation
 @MainActor
 @Observable
 final class CodexProjectCreationModel {
-    let project: CodexProject
-    let host: CodexHost
+    let draftID: String
+    private(set) var project: CodexProject
+    private(set) var host: CodexHost
+    private(set) var updatedAt = Date()
+    private(set) var destinationNeedsValidation = false
     var title = "" { didSet { saveDraftChange() } }
     var prompt = "" { didSet { saveDraftChange() } }
     var modelSelection: CodexDraftModelSelection? { didSet { saveDraftChange() } }
@@ -23,7 +26,7 @@ final class CodexProjectCreationModel {
     private(set) var statusChecksPaused = false
     private var statusObservationGeneration = 0
 
-    @ObservationIgnored let serverURL: URL
+    private(set) var serverURL: URL
     @ObservationIgnored private let network: any CodexProjectNetworking
     @ObservationIgnored private let fileURL: URL
     @ObservationIgnored private var restorationFailed = false
@@ -33,7 +36,7 @@ final class CodexProjectCreationModel {
     @ObservationIgnored private var hasOpenedChat = false
 
     init(project: CodexProject, host: CodexHost, serverURL: URL,
-         network: any CodexProjectNetworking = NetworkService(), storageRoot: URL? = nil) {
+         network: any CodexProjectNetworking = NetworkService(), storageRoot: URL? = nil, draftID: String? = nil) {
         self.project = project
         self.host = host
         self.serverURL = serverURL
@@ -42,7 +45,8 @@ final class CodexProjectCreationModel {
             .appendingPathComponent("CodexProjectCreations", isDirectory: true)
         let key = Data("\(serverURL.absoluteString)\n\(host.id)\n\(project.id)".utf8)
         let name = SHA256.hash(data: key).map { String(format: "%02x", $0) }.joined()
-        fileURL = root.appendingPathComponent(name).appendingPathExtension("json")
+        self.draftID = draftID ?? name
+        fileURL = root.appendingPathComponent(self.draftID).appendingPathExtension("json")
         restore()
     }
 
@@ -52,6 +56,7 @@ final class CodexProjectCreationModel {
     var recoverableThread: CodexThread? { receipt?.state == .unknown ? receipt?.thread : nil }
     var canSubmit: Bool {
         project.canCreate && host.canSelect && request == nil && !isBusy && !restorationFailed
+            && !destinationNeedsValidation
             && (modelSelection == nil || modelSelection?.selection != nil)
             && title.utf16.count <= 120 && prompt.utf16.count <= 20_000
             && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -101,6 +106,34 @@ final class CodexProjectCreationModel {
         case .failed: return "The chat could not be created."
         case .unknown: return isObservingCreation ? "Creation is not confirmed yet. Checking the original request…" : "Creation is not confirmed. Check its status to find the existing request."
         case nil: return request == nil ? nil : "Creation is not confirmed. Check its status to find the existing request."
+        }
+    }
+
+    @discardableResult
+    func changeDestination(project: CodexProject, host: CodexHost, serverURL: URL) -> Bool {
+        guard request == nil, !isBusy, !restorationFailed else { return false }
+        let previous = (self.project, self.host, self.serverURL, destinationNeedsValidation)
+        self.project = project
+        self.host = host
+        self.serverURL = serverURL
+        destinationNeedsValidation = modelSelection != nil
+        if save() { return true }
+        (self.project, self.host, self.serverURL, destinationNeedsValidation) = previous
+        return false
+    }
+
+    func validateDestination(using settings: CodexModelSettingsModel) {
+        guard request == nil else { return }
+        guard settings.matches(from: serverURL, hostId: host.id, threadId: nil) else {
+            destinationNeedsValidation = modelSelection != nil
+            return
+        }
+        if let reason = settings.validationMessage(for: modelSelection) {
+            destinationNeedsValidation = true
+            error = reason
+        } else {
+            destinationNeedsValidation = false
+            error = nil
         }
     }
 
@@ -300,6 +333,14 @@ final class CodexProjectCreationModel {
         defer { isRestoring = false }
         do {
             let saved = try JSONDecoder().decode(SavedCreation.self, from: Data(contentsOf: fileURL))
+            guard (saved.version ?? 1) <= 2 else { throw NetworkService.NetworkError.badResponse }
+            if let destination = saved.destination {
+                project = destination.project
+                host = destination.host
+                serverURL = destination.serverURL
+            }
+            updatedAt = saved.updatedAt ?? Date()
+            destinationNeedsValidation = saved.destinationNeedsValidation ?? false
             guard saved.request == nil || (saved.request?.hostId == host.id && saved.request?.projectId == project.id) else {
                 throw NetworkService.NetworkError.badResponse
             }
@@ -326,10 +367,14 @@ final class CodexProjectCreationModel {
         // A status read already in flight must not restore the creation draft
         // after the user has opened its confirmed existing chat.
         if hasOpenedChat { return true }
+        guard !restorationFailed else { return false }
         do {
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             let draft = CreationDraft(title: title, prompt: prompt, modelSelection: modelSelection)
-            let data = try JSONEncoder().encode(SavedCreation(request: request, receipt: receipt, draft: draft,
+            updatedAt = Date()
+            let data = try JSONEncoder().encode(SavedCreation(version: 2, draftID: draftID,
+                                                             destination: CodexNewChatDestination(serverURL: serverURL, host: host, project: project),
+                                                             updatedAt: updatedAt, destinationNeedsValidation: destinationNeedsValidation, request: request, receipt: receipt, draft: draft,
                                                              retryPendingAttemptId: retryPendingAttemptId,
                                                              localValidationRejection: localValidationRejection))
             try data.write(to: fileURL, options: [.atomic, .completeFileProtectionUnlessOpen])
@@ -347,6 +392,11 @@ final class CodexProjectCreationModel {
     }
 
     private struct SavedCreation: Codable {
+        var version: Int? = nil
+        var draftID: String? = nil
+        var destination: CodexNewChatDestination? = nil
+        var updatedAt: Date? = nil
+        var destinationNeedsValidation: Bool? = nil
         let request: CodexCreateChatRequest?
         let receipt: CodexChatCreationReceipt?
         var draft: CreationDraft? = nil

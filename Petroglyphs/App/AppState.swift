@@ -22,7 +22,7 @@ class AppState {
     var newCodexChat: CodexProjectCreationModel? {
         didSet {
             if let draft = newCodexChat,
-               let data = try? JSONEncoder().encode(CodexNewChatDestination(serverURL: draft.serverURL, host: draft.host, project: draft.project)) {
+               let data = try? JSONEncoder().encode(CodexNewChatDestination(serverURL: draft.serverURL, host: draft.host, project: draft.project, draftID: draft.draftID)) {
                 UserDefaults.standard.set(data, forKey: "newCodexChatDestination")
             } else {
                 UserDefaults.standard.removeObject(forKey: "newCodexChatDestination")
@@ -36,12 +36,20 @@ class AppState {
         }
         if let data = UserDefaults.standard.data(forKey: "newCodexChatDestination"),
            let destination = try? JSONDecoder().decode(CodexNewChatDestination.self, from: data) {
-            newCodexChat = CodexProjectCreationModel(project: destination.project, host: destination.host, serverURL: destination.serverURL)
+            newCodexChat = CodexProjectCreationModel(project: destination.project, host: destination.host, serverURL: destination.serverURL, draftID: destination.draftID)
         }
     }
 
     func startNewChat(project: CodexProject, host: CodexHost, serverURL: URL) {
-        newCodexChat = CodexProjectCreationModel(project: project, host: host, serverURL: serverURL)
+        if let draft = newCodexChat, draft.request == nil {
+            if draft.changeDestination(project: project, host: host, serverURL: serverURL) { newCodexChat = draft }
+        } else {
+            startIndependentChat(project: project, host: host, serverURL: serverURL)
+        }
+    }
+
+    func startIndependentChat(project: CodexProject, host: CodexHost, serverURL: URL) {
+        newCodexChat = CodexProjectCreationModel(project: project, host: host, serverURL: serverURL, draftID: UUID().uuidString.lowercased())
     }
 
     func finishNewChat(_ thread: CodexThread, from draft: CodexProjectCreationModel) {

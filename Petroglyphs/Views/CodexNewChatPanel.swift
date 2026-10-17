@@ -155,6 +155,13 @@ struct CodexNewChatPanel: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("chat.newDraft")
+        .onChange(of: modelSettings.isLoading, initial: true) { _, loading in
+            if !loading { model.validateDestination(using: modelSettings) }
+        }
+        .onChange(of: model.modelSelection) { _, _ in model.validateDestination(using: modelSettings) }
+        .task(id: "\(model.serverURL.absoluteString):\(model.host.id):\(model.project.id)") {
+            model.validateDestination(using: modelSettings)
+        }
         .task(id: model.statusObservationID) { await model.observeCreation() }
         .onChange(of: model.createdThread, initial: true) { _, thread in
             if let thread { onCreated(thread) }
